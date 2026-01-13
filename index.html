@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Inner Reflection</title>
+    
+    <!-- Prevent iOS zoom on input focus -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%2300d4aa'/></svg>">
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="css/styles.css">
+    
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <!-- Tone.js for audio synthesis -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    
+    <!-- MediaPipe Face Detection and Face Mesh -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+</head>
+<body>
+    <!-- Hidden video element for camera -->
+    <video id="camera-feed" autoplay playsinline style="display: none;"></video>
+    
+    <!-- Main canvas for Three.js -->
+    <canvas id="main-canvas"></canvas>
+    
+    <!-- Face visualization overlay -->
+    <canvas id="face-overlay" style="
+        position: fixed;
+        bottom: 20px;
+        left: 20px;
+        width: 160px;
+        height: 200px;
+        pointer-events: none;
+        z-index: 100;
+        opacity: 0.9;
+    "></canvas>
+    
+    <!-- Start Screen Overlay -->
+    <div id="start-screen" class="start-screen">
+        <div class="start-content">
+            <h1 class="start-title glass-text">START</h1>
+            
+            <div class="permissions-container">
+                <div class="permission-toggle" data-permission="microphone">
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="toggle-mic" checked>
+                        <label for="toggle-mic"></label>
+                    </div>
+                    <span class="toggle-label">Enable Microphone</span>
+                    <span class="toggle-status"></span>
+                </div>
+                
+                <div class="permission-toggle" data-permission="camera">
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="toggle-camera" checked>
+                        <label for="toggle-camera"></label>
+                    </div>
+                    <span class="toggle-label">Enable Camera</span>
+                    <span class="toggle-status"></span>
+                </div>
+                
+                <div class="permission-toggle" data-permission="accelerometer" id="accelerometer-option" style="display: none;">
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="toggle-accel">
+                        <label for="toggle-accel"></label>
+                    </div>
+                    <span class="toggle-label">Enable Motion</span>
+                    <span class="toggle-status"></span>
+                </div>
+                
+                <div class="permission-toggle" data-permission="fullscreen">
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="toggle-fullscreen">
+                        <label for="toggle-fullscreen"></label>
+                    </div>
+                    <span class="toggle-label">Start Fullscreen</span>
+                    <span class="toggle-status"></span>
+                </div>
+                
+                <div class="permission-toggle" data-permission="sound">
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="toggle-sound" checked>
+                        <label for="toggle-sound"></label>
+                    </div>
+                    <span class="toggle-label">Enable Sound</span>
+                    <span class="toggle-status"></span>
+                </div>
+            </div>
+            
+            <p class="headphones-note">
+                <span class="icon">🎧</span>
+                Best experienced with headphones
+            </p>
+            
+            <button id="start-button" class="start-button">
+                <span>Begin Experience</span>
+            </button>
+        </div>
+        
+        <!-- Glass blur overlay -->
+        <div class="glass-overlay"></div>
+    </div>
+    
+    <!-- Loading indicator -->
+    <div id="loading" class="loading" style="display: none;">
+        <div class="loading-spinner"></div>
+        <p>Initializing...</p>
+    </div>
+    
+    <!-- Debug panel (hidden by default, toggle with 'D' key) -->
+    <div id="debug-panel" class="debug-panel" style="display: none;">
+        <div class="debug-header">
+            <h3>Controls</h3>
+            <button id="debug-close" class="debug-close">×</button>
+        </div>
+        <div id="debug-content" class="debug-content">
+            <!-- Preset buttons -->
+            <div class="debug-section">
+                <h4>Presets</h4>
+                <div class="preset-buttons">
+                    <button class="preset-btn" data-preset="calm">Calm</button>
+                    <button class="preset-btn" data-preset="softBlobs">Soft Blobs</button>
+                    <button class="preset-btn" data-preset="singleRing">Single Ring</button>
+                    <button class="preset-btn" data-preset="multiRings">Multi Rings</button>
+                    <button class="preset-btn" data-preset="chromatic">Chromatic</button>
+                    <button class="preset-btn" data-preset="angular">Angular</button>
+                    <button class="preset-btn" data-preset="minimal">Minimal</button>
+                </div>
+            </div>
+            
+            <!-- Color Controls -->
+            <div class="debug-section">
+                <h4>Colors</h4>
+                <div class="slider-group">
+                    <label>Hue 1: <span id="val-hue1">0.5</span></label>
+                    <input type="range" id="ctrl-hue1" min="0" max="1" step="0.01" value="0.5">
+                </div>
+                <div class="slider-group">
+                    <label>Hue 2: <span id="val-hue2">0.55</span></label>
+                    <input type="range" id="ctrl-hue2" min="0" max="1" step="0.01" value="0.55">
+                </div>
+                <div class="slider-group">
+                    <label>Saturation: <span id="val-saturation">0.6</span></label>
+                    <input type="range" id="ctrl-saturation" min="0" max="1" step="0.01" value="0.6">
+                </div>
+                <div class="slider-group">
+                    <label>Brightness: <span id="val-brightness">0.6</span></label>
+                    <input type="range" id="ctrl-brightness" min="0" max="1" step="0.01" value="0.6">
+                </div>
+            </div>
+            
+            <!-- Circle/Displacement Controls -->
+            <div class="debug-section">
+                <h4>Circles (Displacement)</h4>
+                <div class="slider-group">
+                    <label>Strength: <span id="val-strength">0.3</span></label>
+                    <input type="range" id="ctrl-strength" min="0" max="1" step="0.01" value="0.3">
+                </div>
+                <div class="slider-group">
+                    <label>Radius: <span id="val-radius">0.6</span></label>
+                    <input type="range" id="ctrl-radius" min="0.1" max="1.5" step="0.01" value="0.6">
+                </div>
+                <div class="slider-group">
+                    <label>Rings: <span id="val-rings">8</span></label>
+                    <input type="range" id="ctrl-rings" min="1" max="20" step="1" value="8">
+                </div>
+                <div class="slider-group">
+                    <label>Center X: <span id="val-centerX">0.5</span></label>
+                    <input type="range" id="ctrl-centerX" min="0" max="1" step="0.01" value="0.5">
+                </div>
+                <div class="slider-group">
+                    <label>Center Y: <span id="val-centerY">0.5</span></label>
+                    <input type="range" id="ctrl-centerY" min="0" max="1" step="0.01" value="0.5">
+                </div>
+                <div class="slider-group">
+                    <label>Chromatic: <span id="val-chromatic">0.02</span></label>
+                    <input type="range" id="ctrl-chromatic" min="0" max="0.1" step="0.005" value="0.02">
+                </div>
+                <div class="slider-group">
+                    <label>Wobble: <span id="val-wobble">0.02</span></label>
+                    <input type="range" id="ctrl-wobble" min="0" max="0.1" step="0.005" value="0.02">
+                </div>
+            </div>
+            
+            <!-- Secondary Circles -->
+            <div class="debug-section">
+                <h4>Secondary Circles</h4>
+                <div class="slider-group">
+                    <label>Circle 2 Strength: <span id="val-circle2">0</span></label>
+                    <input type="range" id="ctrl-circle2" min="0" max="0.5" step="0.01" value="0">
+                </div>
+                <div class="slider-group">
+                    <label>Circle 3 Strength: <span id="val-circle3">0</span></label>
+                    <input type="range" id="ctrl-circle3" min="0" max="0.5" step="0.01" value="0">
+                </div>
+            </div>
+            
+            <!-- Morph Controls -->
+            <div class="debug-section">
+                <h4>Shape Morph</h4>
+                <div class="slider-group">
+                    <label>Morph Amount: <span id="val-morph">0</span></label>
+                    <input type="range" id="ctrl-morph" min="0" max="1" step="0.01" value="0">
+                </div>
+                <div class="slider-group">
+                    <label>Morph Type: <span id="val-morphType">0</span></label>
+                    <input type="range" id="ctrl-morphType" min="0" max="2" step="1" value="0">
+                </div>
+            </div>
+            
+            <!-- Shape & Wave Motion Controls -->
+            <div class="debug-section">
+                <h4>Shape & Wave Motion</h4>
+                <div class="slider-group">
+                    <label>Shape Type: <span id="val-shapeType">0</span></label>
+                    <input type="range" id="ctrl-shapeType" min="0" max="10" step="1" value="0">
+                    <small class="shape-hint">0:Concentric 1:Spiral 2:Hex 3:Diamond 4:Square 5:Flower 6:Star 7:Interference 8:Organic 9:Folding 10:Inverted</small>
+                </div>
+                <div class="slider-group">
+                    <label>Wave Delay: <span id="val-waveDelay">0.4</span></label>
+                    <input type="range" id="ctrl-waveDelay" min="0" max="2" step="0.05" value="0.4">
+                </div>
+                <div class="slider-group">
+                    <label>Wave Amplitude: <span id="val-waveAmplitude">0.05</span></label>
+                    <input type="range" id="ctrl-waveAmplitude" min="0" max="0.3" step="0.005" value="0.05">
+                </div>
+                <div class="slider-group">
+                    <label>Wave Speed: <span id="val-waveSpeed">1.0</span></label>
+                    <input type="range" id="ctrl-waveSpeed" min="0" max="3" step="0.1" value="1.0">
+                </div>
+                <div class="slider-group">
+                    <label>Edge Sharpness: <span id="val-edgeSharpness">0.03</span></label>
+                    <input type="range" id="ctrl-edgeSharpness" min="0.01" max="0.3" step="0.01" value="0.03">
+                </div>
+                <div class="slider-group">
+                    <label>Min Radius: <span id="val-minRadius">0.05</span></label>
+                    <input type="range" id="ctrl-minRadius" min="0" max="0.5" step="0.01" value="0.05">
+                </div>
+                <div class="slider-group">
+                    <label>Rotation: <span id="val-rotation">0</span></label>
+                    <input type="range" id="ctrl-rotation" min="0" max="6.28" step="0.1" value="0">
+                </div>
+                <div class="slider-group">
+                    <label>Rotation Speed: <span id="val-rotationSpeed">0</span></label>
+                    <input type="range" id="ctrl-rotationSpeed" min="0" max="1" step="0.02" value="0">
+                </div>
+                <div class="slider-group">
+                    <label>Fold Amount: <span id="val-foldAmount">0.5</span></label>
+                    <input type="range" id="ctrl-foldAmount" min="0" max="1" step="0.05" value="0.5">
+                </div>
+                <div class="slider-group">
+                    <label>Invert Amount: <span id="val-invertAmount">0.5</span></label>
+                    <input type="range" id="ctrl-invertAmount" min="0" max="1" step="0.05" value="0.5">
+                </div>
+                <div class="slider-group">
+                    <label>Secondary Wave: <span id="val-secondaryWave">0.3</span></label>
+                    <input type="range" id="ctrl-secondaryWave" min="0" max="1" step="0.05" value="0.3">
+                </div>
+                <div class="slider-group">
+                    <label>Tertiary Wave: <span id="val-tertiaryWave">0.1</span></label>
+                    <input type="range" id="ctrl-tertiaryWave" min="0" max="1" step="0.05" value="0.1">
+                </div>
+            </div>
+            
+            <!-- Post Processing -->
+            <div class="debug-section">
+                <h4>Post Processing</h4>
+                <div class="slider-group">
+                    <label>Blur: <span id="val-blur">0.3</span></label>
+                    <input type="range" id="ctrl-blur" min="0" max="2" step="0.05" value="0.3">
+                </div>
+                <div class="slider-group">
+                    <label>Glow: <span id="val-glow">0.2</span></label>
+                    <input type="range" id="ctrl-glow" min="0" max="1" step="0.05" value="0.2">
+                </div>
+                <div class="slider-group">
+                    <label>Vignette: <span id="val-vignette">0.3</span></label>
+                    <input type="range" id="ctrl-vignette" min="0" max="1" step="0.05" value="0.3">
+                </div>
+            </div>
+            
+            <!-- Animation Speed -->
+            <div class="debug-section">
+                <h4>Animation</h4>
+                <div class="slider-group">
+                    <label>Time Speed: <span id="val-timeSpeed">0.3</span></label>
+                    <input type="range" id="ctrl-timeSpeed" min="0" max="1" step="0.05" value="0.3">
+                </div>
+                <div class="slider-group">
+                    <label>Drift Speed: <span id="val-driftSpeed">0.5</span></label>
+                    <input type="range" id="ctrl-driftSpeed" min="0" max="1" step="0.05" value="0.5">
+                </div>
+            </div>
+            
+            <!-- Audio Controls -->
+            <div class="debug-section">
+                <h4>🔊 Audio Master</h4>
+                <div class="slider-group">
+                    <label>Master Volume: <span id="val-volume">0.5</span></label>
+                    <input type="range" id="ctrl-volume" min="0" max="1" step="0.05" value="0.5">
+                </div>
+                <div class="slider-group">
+                    <label>Master Reverb: <span id="val-reverb">0.5</span></label>
+                    <input type="range" id="ctrl-reverb" min="0" max="1" step="0.05" value="0.5">
+                </div>
+                <div class="slider-group">
+                    <label>Master Delay: <span id="val-masterDelay">0.3</span></label>
+                    <input type="range" id="ctrl-masterDelay" min="0" max="1" step="0.02" value="0.3">
+                </div>
+                <div class="slider-group">
+                    <label>Master Filter: <span id="val-masterFilter">8000</span>Hz</label>
+                    <input type="range" id="ctrl-masterFilter" min="200" max="16000" step="100" value="8000">
+                </div>
+                <div class="checkbox-group">
+                    <label><input type="checkbox" id="ctrl-mute"> Mute All Audio</label>
+                </div>
+            </div>
+            
+            <!-- Drone Layers -->
+            <div class="debug-section">
+                <h4>🎹 Drone Layers</h4>
+                <div class="checkbox-group">
+                    <label><input type="checkbox" id="ctrl-drone-base" checked> Base Drone (Deep)</label>
+                </div>
+                <div class="slider-group">
+                    <label>Base Volume: <span id="val-droneBase">-15</span>dB</label>
+                    <input type="range" id="ctrl-droneBase" min="-40" max="0" step="1" value="-15">
+                </div>
+                <div class="slider-group">
+                    <label>Base Filter: <span id="val-droneBaseFilter">200</span>Hz</label>
+                    <input type="range" id="ctrl-droneBaseFilter" min="50" max="1000" step="10" value="200">
+                </div>
+                
+                <div class="checkbox-group">
+                    <label><input type="checkbox" id="ctrl-drone-mid" checked> Mid Drone (Harmonic)</label>
+                </div>
+                <div class="slider-group">
+                    <label>Mid Volume: <span id="val-droneMid">-18</span>dB</label>
+                    <input type="range" id="ctrl-droneMid" min="-40" max="0" step="1" value="-18">
+                </div>
+                <div class="slider-group">
+                    <label>Mid Filter: <span id="val-droneMidFilter">800</span>Hz</label>
+                    <input type="range" id="ctrl-droneMidFilter" min="200" max="4000" step="50" value="800">
+                </div>
+                
+                <div class="checkbox-group">
+                    <label><input type="checkbox" id="ctrl-drone-high" checked> High Drone (Shimmer)</label>
+                </div>
+                <div class="slider-group">
+                    <label>High Volume: <span id="val-droneHigh">-20</span>dB</label>
+                    <input type="range" id="ctrl-droneHigh" min="-40" max="0" step="1" value="-20">
+                </div>
+                <div class="slider-group">
+                    <label>High Filter: <span id="val-droneHighFilter">2000</span>Hz</label>
+                    <input type="range" id="ctrl-droneHighFilter" min="500" max="12000" step="100" value="2000">
+                </div>
+                
+                <div class="checkbox-group">
+                    <label><input type="checkbox" id="ctrl-drone-pad" checked> Pad Drone (Texture)</label>
+                </div>
+                <div class="slider-group">
+                    <label>Pad Volume: <span id="val-dronePad">-18</span>dB</label>
+                    <input type="range" id="ctrl-dronePad" min="-40" max="0" step="1" value="-18">
+                </div>
+            </div>
+            
+            <!-- Granular Layer: Ambient -->
+            <div class="debug-section">
+                <h4>🌊 Granular: Ambient Layer</h4>
+                <div class="checkbox-group">
+                    <label><input type="checkbox" id="ctrl-gran-ambient" checked> Enable Ambient</label>
+                </div>
+                <div class="slider-group">
+                    <label>Volume: <span id="val-granAmbientVol">-18</span>dB</label>
+                    <input type="range" id="ctrl-granAmbientVol" min="-40" max="0" step="1" value="-18">
+                </div>
+                <div class="slider-group">
+                    <label>Grain Size: <span id="val-granAmbientSize">0.4</span>s</label>
+                    <input type="range" id="ctrl-granAmbientSize" min="0.01" max="2.0" step="0.01" value="0.4">
+                </div>
+                <div class="slider-group">
+                    <label>Overlap: <span id="val-granAmbientOverlap">0.3</span></label>
+                    <input type="range" id="ctrl-granAmbientOverlap" min="0.01" max="0.9" step="0.01" value="0.3">
+                </div>
+                <div class="slider-group">
+                    <label>Speed: <span id="val-granAmbientSpeed">0.5</span>x</label>
+                    <input type="range" id="ctrl-granAmbientSpeed" min="0.1" max="4.0" step="0.05" value="0.5">
+                </div>
+                <div class="slider-group">
+                    <label>Filter Freq: <span id="val-granAmbientFilter">800</span>Hz</label>
+                    <input type="range" id="ctrl-granAmbientFilter" min="100" max="8000" step="50" value="800">
+                </div>
+                <div class="slider-group">
+                    <label>Reverb Wet: <span id="val-granAmbientReverb">0.8</span></label>
+                    <input type="range" id="ctrl-granAmbientReverb" min="0" max="1" step="0.02" value="0.8">
+                </div>
+                <div class="slider-group">
+                    <label>Delay Wet: <span id="val-granAmbientDelay">0.4</span></label>
+                    <input type="range" id="ctrl-granAmbientDelay" min="0" max="1" step="0.02" value="0.4">
+                </div>
+                <div class="slider-group">
+                    <label>Delay Time: <span id="val-granAmbientDelayTime">0.5</span>s</label>
+                    <input type="range" id="ctrl-granAmbientDelayTime" min="0.05" max="2.0" step="0.05" value="0.5">
+                </div>
+            </div>
+            
+            <!-- Granular Layer: Choppy -->
+            <div class="debug-section">
+                <h4>✂️ Granular: Choppy Layer</h4>
+                <div class="checkbox-group">
+                    <label><input type="checkbox" id="ctrl-gran-choppy" checked> Enable Choppy</label>
+                </div>
+                <div class="slider-group">
+                    <label>Volume: <span id="val-granChoppyVol">-22</span>dB</label>
+                    <input type="range" id="ctrl-granChoppyVol" min="-40" max="0" step="1" value="-22">
+                </div>
+                <div class="slider-group">
+                    <label>Grain Size: <span id="val-granChoppySize">0.05</span>s</label>
+                    <input type="range" id="ctrl-granChoppySize" min="0.005" max="0.5" step="0.005" value="0.05">
+                </div>
+                <div class="slider-group">
+                    <label>Overlap: <span id="val-granChoppyOverlap">0.02</span></label>
+                    <input type="range" id="ctrl-granChoppyOverlap" min="0.001" max="0.5" step="0.005" value="0.02">
+                </div>
+                <div class="slider-group">
+                    <label>Speed: <span id="val-granChoppySpeed">1.0</span>x</label>
+                    <input type="range" id="ctrl-granChoppySpeed" min="0.1" max="4.0" step="0.05" value="1.0">
+                </div>
+                <div class="slider-group">
+                    <label>Filter Freq: <span id="val-granChoppyFilter">2000</span>Hz</label>
+                    <input type="range" id="ctrl-granChoppyFilter" min="100" max="8000" step="50" value="2000">
+                </div>
+                <div class="slider-group">
+                    <label>Filter Q: <span id="val-granChoppyQ">2</span></label>
+                    <input type="range" id="ctrl-granChoppyQ" min="0.1" max="10" step="0.1" value="2">
+                </div>
+                <div class="slider-group">
+                    <label>Reverb Wet: <span id="val-granChoppyReverb">0.5</span></label>
+                    <input type="range" id="ctrl-granChoppyReverb" min="0" max="1" step="0.02" value="0.5">
+                </div>
+                <div class="slider-group">
+                    <label>Delay Wet: <span id="val-granChoppyDelay">0.6</span></label>
+                    <input type="range" id="ctrl-granChoppyDelay" min="0" max="1" step="0.02" value="0.6">
+                </div>
+                <div class="slider-group">
+                    <label>Delay Time: <span id="val-granChoppyDelayTime">0.125</span>s</label>
+                    <input type="range" id="ctrl-granChoppyDelayTime" min="0.02" max="1.0" step="0.01" value="0.125">
+                </div>
+                <div class="slider-group">
+                    <label>Randomness: <span id="val-granChoppyRandom">0</span></label>
+                    <input type="range" id="ctrl-granChoppyRandom" min="0" max="1" step="0.02" value="0">
+                </div>
+            </div>
+            
+            <!-- Granular Layer: Shimmer -->
+            <div class="debug-section">
+                <h4>✨ Granular: Shimmer Layer</h4>
+                <div class="checkbox-group">
+                    <label><input type="checkbox" id="ctrl-gran-shimmer" checked> Enable Shimmer</label>
+                </div>
+                <div class="slider-group">
+                    <label>Volume: <span id="val-granShimmerVol">-25</span>dB</label>
+                    <input type="range" id="ctrl-granShimmerVol" min="-40" max="0" step="1" value="-25">
+                </div>
+                <div class="slider-group">
+                    <label>Grain Size: <span id="val-granShimmerSize">0.15</span>s</label>
+                    <input type="range" id="ctrl-granShimmerSize" min="0.01" max="1.0" step="0.01" value="0.15">
+                </div>
+                <div class="slider-group">
+                    <label>Overlap: <span id="val-granShimmerOverlap">0.1</span></label>
+                    <input type="range" id="ctrl-granShimmerOverlap" min="0.01" max="0.9" step="0.01" value="0.1">
+                </div>
+                <div class="slider-group">
+                    <label>Speed: <span id="val-granShimmerSpeed">2.0</span>x</label>
+                    <input type="range" id="ctrl-granShimmerSpeed" min="0.5" max="8.0" step="0.1" value="2.0">
+                </div>
+                <div class="slider-group">
+                    <label>Filter Freq: <span id="val-granShimmerFilter">4000</span>Hz</label>
+                    <input type="range" id="ctrl-granShimmerFilter" min="500" max="16000" step="100" value="4000">
+                </div>
+                <div class="slider-group">
+                    <label>Reverb Wet: <span id="val-granShimmerReverb">0.9</span></label>
+                    <input type="range" id="ctrl-granShimmerReverb" min="0" max="1" step="0.02" value="0.9">
+                </div>
+                <div class="slider-group">
+                    <label>Delay Wet: <span id="val-granShimmerDelay">0.3</span></label>
+                    <input type="range" id="ctrl-granShimmerDelay" min="0" max="1" step="0.02" value="0.3">
+                </div>
+                <div class="slider-group">
+                    <label>Pitch Shift: <span id="val-granShimmerPitch">0</span> cents</label>
+                    <input type="range" id="ctrl-granShimmerPitch" min="-1200" max="1200" step="50" value="0">
+                </div>
+            </div>
+            
+            <!-- Granular Layer: Deep -->
+            <div class="debug-section">
+                <h4>🔉 Granular: Deep Layer</h4>
+                <div class="checkbox-group">
+                    <label><input type="checkbox" id="ctrl-gran-deep" checked> Enable Deep</label>
+                </div>
+                <div class="slider-group">
+                    <label>Volume: <span id="val-granDeepVol">-20</span>dB</label>
+                    <input type="range" id="ctrl-granDeepVol" min="-40" max="0" step="1" value="-20">
+                </div>
+                <div class="slider-group">
+                    <label>Grain Size: <span id="val-granDeepSize">0.6</span>s</label>
+                    <input type="range" id="ctrl-granDeepSize" min="0.1" max="3.0" step="0.05" value="0.6">
+                </div>
+                <div class="slider-group">
+                    <label>Overlap: <span id="val-granDeepOverlap">0.4</span></label>
+                    <input type="range" id="ctrl-granDeepOverlap" min="0.1" max="0.9" step="0.02" value="0.4">
+                </div>
+                <div class="slider-group">
+                    <label>Speed: <span id="val-granDeepSpeed">0.25</span>x</label>
+                    <input type="range" id="ctrl-granDeepSpeed" min="0.05" max="1.0" step="0.01" value="0.25">
+                </div>
+                <div class="slider-group">
+                    <label>Filter Freq: <span id="val-granDeepFilter">400</span>Hz</label>
+                    <input type="range" id="ctrl-granDeepFilter" min="50" max="2000" step="25" value="400">
+                </div>
+                <div class="slider-group">
+                    <label>Filter Q: <span id="val-granDeepQ">3</span></label>
+                    <input type="range" id="ctrl-granDeepQ" min="0.1" max="15" step="0.1" value="3">
+                </div>
+                <div class="slider-group">
+                    <label>Reverb Wet: <span id="val-granDeepReverb">0.7</span></label>
+                    <input type="range" id="ctrl-granDeepReverb" min="0" max="1" step="0.02" value="0.7">
+                </div>
+                <div class="slider-group">
+                    <label>Delay Wet: <span id="val-granDeepDelay">0.5</span></label>
+                    <input type="range" id="ctrl-granDeepDelay" min="0" max="1" step="0.02" value="0.5">
+                </div>
+                <div class="slider-group">
+                    <label>Delay Time: <span id="val-granDeepDelayTime">0.75</span>s</label>
+                    <input type="range" id="ctrl-granDeepDelayTime" min="0.1" max="2.0" step="0.05" value="0.75">
+                </div>
+            </div>
+            
+            <!-- Mic Processing -->
+            <div class="debug-section">
+                <h4>🎤 Mic Processing</h4>
+                <div class="checkbox-group">
+                    <label><input type="checkbox" id="ctrl-mic-enabled" checked> Enable Mic Effects</label>
+                </div>
+                <div class="slider-group">
+                    <label>Mic Volume: <span id="val-micVolume">0.15</span></label>
+                    <input type="range" id="ctrl-micVolume" min="0" max="1" step="0.02" value="0.15">
+                </div>
+                <div class="slider-group">
+                    <label>Mic Filter: <span id="val-micFilter">1200</span>Hz</label>
+                    <input type="range" id="ctrl-micFilter" min="100" max="8000" step="50" value="1200">
+                </div>
+                <div class="slider-group">
+                    <label>Mic Reverb: <span id="val-micReverb">0.9</span></label>
+                    <input type="range" id="ctrl-micReverb" min="0" max="1" step="0.02" value="0.9">
+                </div>
+                <div class="slider-group">
+                    <label>Mic Delay: <span id="val-micDelay">0.7</span></label>
+                    <input type="range" id="ctrl-micDelay" min="0" max="1" step="0.02" value="0.7">
+                </div>
+                <div class="slider-group">
+                    <label>Delay Feedback: <span id="val-micDelayFeedback">0.6</span></label>
+                    <input type="range" id="ctrl-micDelayFeedback" min="0" max="0.95" step="0.02" value="0.6">
+                </div>
+                <div class="slider-group">
+                    <label>Chorus Depth: <span id="val-micChorus">0.8</span></label>
+                    <input type="range" id="ctrl-micChorus" min="0" max="1" step="0.02" value="0.8">
+                </div>
+            </div>
+            
+            <!-- Global Effects -->
+            <div class="debug-section">
+                <h4>🌀 Global Effects</h4>
+                <div class="slider-group">
+                    <label>Reverb Decay: <span id="val-reverbDecay">6</span>s</label>
+                    <input type="range" id="ctrl-reverbDecay" min="0.5" max="30" step="0.5" value="6">
+                </div>
+                <div class="slider-group">
+                    <label>Delay Feedback: <span id="val-delayFeedback">0.4</span></label>
+                    <input type="range" id="ctrl-delayFeedback" min="0" max="0.95" step="0.02" value="0.4">
+                </div>
+                <div class="slider-group">
+                    <label>Chorus Rate: <span id="val-chorusRate">0.5</span>Hz</label>
+                    <input type="range" id="ctrl-chorusRate" min="0.05" max="5" step="0.05" value="0.5">
+                </div>
+                <div class="slider-group">
+                    <label>Chorus Depth: <span id="val-chorusDepth">0.5</span></label>
+                    <input type="range" id="ctrl-chorusDepth" min="0" max="1" step="0.02" value="0.5">
+                </div>
+                <div class="slider-group">
+                    <label>Phaser Rate: <span id="val-phaserRate">0.2</span>Hz</label>
+                    <input type="range" id="ctrl-phaserRate" min="0.01" max="2" step="0.01" value="0.2">
+                </div>
+            </div>
+            
+            <!-- Generative Controls -->
+            <div class="debug-section">
+                <h4>🎲 Generative Behavior</h4>
+                <div class="slider-group">
+                    <label>Grain Random Position: <span id="val-grainRandomPos">0</span></label>
+                    <input type="range" id="ctrl-grainRandomPos" min="0" max="1" step="0.02" value="0">
+                </div>
+                <div class="slider-group">
+                    <label>Speed Drift: <span id="val-speedDrift">0</span></label>
+                    <input type="range" id="ctrl-speedDrift" min="0" max="1" step="0.02" value="0">
+                </div>
+                <div class="slider-group">
+                    <label>Buffer Update Rate: <span id="val-bufferUpdate">15</span>s</label>
+                    <input type="range" id="ctrl-bufferUpdate" min="5" max="60" step="1" value="15">
+                </div>
+                <div class="slider-group">
+                    <label>Mic Reactivity: <span id="val-micReactivity">0.5</span></label>
+                    <input type="range" id="ctrl-micReactivity" min="0" max="1" step="0.02" value="0.5">
+                </div>
+            </div>
+            
+            <!-- Info -->
+            <div class="debug-section debug-info">
+                <h4>Info</h4>
+                <div id="debug-fps">FPS: --</div>
+                <div id="debug-state">State: Running</div>
+                <div id="debug-audio">Audio: --</div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Debug toggle button (visible after experience starts) -->
+    <button id="debug-toggle" style="display: none;">⚙</button>
+
+    <!-- Core modules -->
+    <script src="js/config.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/inputManager.js"></script>
+    <script src="js/audioEngine.js"></script>
+    <script src="js/shaders.js"></script>
+    <script src="js/visualEngine.js"></script>
+    <script src="js/faceTracker.js"></script>
+    <script src="js/stateEngine.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+# Hide prompting/development notes
+README.md
+PROJECT_SPEC.md
+
+# Copilot instructions (if any)
+.github/copilot-instructions.md
+copilot*.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+*.swp
+*.swo

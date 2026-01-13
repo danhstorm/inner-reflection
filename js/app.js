@@ -380,16 +380,24 @@ class InnerReflectionApp {
                     if (permissionsContainer) {
                         permissionsContainer.classList.add('fading-out');
                     }
-                    // Start the experience after fade completes (1.2s)
-                    setTimeout(() => this.start(), 1200);
+                    // Start the experience after fade completes (2s for smoother transition)
+                    setTimeout(() => this.start(), 2000);
                 }, 900);
             });
             
-            // For touch devices, also handle touchstart for immediate feedback
-            title.addEventListener('touchstart', (e) => {
+            // For touch devices, handle touchend to trigger the click action
+            // (touchstart just adds visual feedback, touchend does the actual start)
+            title.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                // Trigger click if not already clicked
                 if (!title.classList.contains('clicked')) {
-                    title.classList.add('clicked');
+                    title.click();  // Fire synthetic click event
                 }
+            });
+            
+            // Touch feedback on touchstart
+            title.addEventListener('touchstart', (e) => {
+                // Just visual feedback, no action yet
             }, { passive: true });
         }
     }
@@ -529,11 +537,11 @@ class InnerReflectionApp {
             }
             
             // Start face tracking if camera is enabled (models preloaded)
-            // Skip if already started during preview
+            // Always reinitialize to ensure proper state after preview
             if (this.enabledInputs.camera && this.inputManager.enabled.camera && this.enabledInputs.faceTracking) {
-                if (!this.faceTracker.isRunning) {
-                    await this.startFaceTracking();
-                }
+                // Force stop and restart to ensure clean state
+                this.faceTracker.stop();
+                await this.startFaceTracking();
                 
                 // Set up face tracking callbacks
                 this.faceTracker.onFaceDetected = (data) => {
@@ -547,11 +555,10 @@ class InnerReflectionApp {
             
             this.setFaceOverlayVisible(true);
             
-            // Skip hand tracking init if already started during preview
+            // Hand tracking - force restart to ensure clean state
             if (this.enabledInputs.camera && this.inputManager.enabled.camera && this.enabledInputs.hands) {
-                if (!this.handTracker.isRunning) {
-                    await this.startHandTracking();
-                }
+                this.handTracker?.stop();
+                await this.startHandTracking();
             }
             
             this.setHandOverlayVisible(true);
@@ -1575,6 +1582,8 @@ class InnerReflectionApp {
         // Toggle debug panel
         if (debugToggle) {
             debugToggle.addEventListener('click', () => {
+                // Boost smoothing to prevent visual glitches during panel toggle
+                this.visualEngine?.boostSmoothing(15);
                 debugPanel.style.display = debugPanel.style.display === 'none' ? 'block' : 'none';
             });
         }
@@ -1582,6 +1591,8 @@ class InnerReflectionApp {
         // Close debug panel
         if (debugClose) {
             debugClose.addEventListener('click', () => {
+                // Boost smoothing to prevent visual glitches during panel close
+                this.visualEngine?.boostSmoothing(15);
                 debugPanel.style.display = 'none';
             });
         }
@@ -2384,19 +2395,21 @@ class InnerReflectionApp {
         if (active) {
             // Store current values and boost
             this.thumbsUpOriginal = {
-                brightness: this.stateEngine?.get('colorBrightness') ?? 0.55,
-                saturation: this.stateEngine?.get('colorSaturation') ?? 0.7
+                brightness: this.stateEngine?.get('gradientBrightness') ?? 0.55,
+                saturation: this.stateEngine?.get('gradientSaturation') ?? 0.7
             };
-            // Boost brightness and saturation
+            // Boost brightness and saturation with smooth transition
             if (this.stateEngine) {
-                this.stateEngine.set('colorBrightness', Math.min(1, this.thumbsUpOriginal.brightness + 0.25));
-                this.stateEngine.set('colorSaturation', Math.min(1, this.thumbsUpOriginal.saturation + 0.2));
+                this.stateEngine.setTargetValue('gradientBrightness', Math.min(1, this.thumbsUpOriginal.brightness + 0.25));
+                this.stateEngine.setTargetValue('gradientSaturation', Math.min(1, this.thumbsUpOriginal.saturation + 0.2));
+                this.visualEngine?.boostSmoothing(20);  // Fast smoothing for gesture response
             }
         } else {
-            // Restore original values
+            // Restore original values smoothly
             if (this.thumbsUpOriginal && this.stateEngine) {
-                this.stateEngine.set('colorBrightness', this.thumbsUpOriginal.brightness);
-                this.stateEngine.set('colorSaturation', this.thumbsUpOriginal.saturation);
+                this.stateEngine.setTargetValue('gradientBrightness', this.thumbsUpOriginal.brightness);
+                this.stateEngine.setTargetValue('gradientSaturation', this.thumbsUpOriginal.saturation);
+                this.visualEngine?.boostSmoothing(20);
             }
         }
     }
@@ -2408,18 +2421,21 @@ class InnerReflectionApp {
             this.audioEngine.randomizeParameters();
         }
         
-        // Randomize visual state parameters
+        // Randomize visual state parameters with smooth transitions
         if (this.stateEngine) {
-            // Randomly shift hues
-            this.stateEngine.set('colorHue1', Math.random());
-            this.stateEngine.set('colorHue2', Math.random());
-            this.stateEngine.set('colorHue3', Math.random());
-            this.stateEngine.set('colorHue4', Math.random());
+            // Randomly shift hues (use setTargetValue for smooth morphing)
+            this.stateEngine.setTargetValue('colorHue1', Math.random());
+            this.stateEngine.setTargetValue('colorHue2', Math.random());
+            this.stateEngine.setTargetValue('colorHue3', Math.random());
+            this.stateEngine.setTargetValue('colorHue4', Math.random());
             
-            // Randomly shift other visual parameters
-            this.stateEngine.set('displacementStrength', 0.1 + Math.random() * 0.3);
-            this.stateEngine.set('shapeType', Math.floor(Math.random() * 12));
-            this.stateEngine.set('waveAmplitude', Math.random() * 0.2);
+            // Randomly shift other visual parameters - shapeType as 0-1 normalized value
+            this.stateEngine.setTargetValue('displacementStrength', 0.1 + Math.random() * 0.3);
+            this.stateEngine.setTargetValue('shapeType', Math.random());  // 0-1 value, shader handles mapping
+            this.stateEngine.setTargetValue('waveAmplitude', Math.random() * 0.2);
+            
+            // Boost smoothing for faster visual response
+            this.visualEngine?.boostSmoothing(25);
         }
     }
 

@@ -66,7 +66,7 @@ const CONFIG = {
     // AUDIO PARAMETERS
     // =========================================
     audio: {
-        masterVolume: -6,  // dB
+        masterVolume: -14,  // dB - reduced to prevent clipping
         
         // Drone layers configuration
         drones: {
@@ -75,7 +75,7 @@ const CONFIG = {
                 enabled: true,
                 type: 'granular',
                 frequency: 55,          // Hz (A1)
-                volume: -12,            // dB
+                volume: -18,            // dB - reduced
                 attack: 4,              // seconds
                 release: 8,
                 filterFreq: 200,        // Low-pass cutoff
@@ -90,7 +90,7 @@ const CONFIG = {
                 enabled: true,
                 type: 'granular',
                 frequency: 110,         // Hz (A2)
-                volume: -15,
+                volume: -20,            // dB - reduced
                 attack: 3,
                 release: 6,
                 filterFreq: 800,
@@ -105,7 +105,7 @@ const CONFIG = {
                 enabled: true,
                 type: 'granular',
                 frequency: 440,         // Hz (A4)
-                volume: -35,
+                volume: -38,            // dB - reduced
                 attack: 2,
                 release: 4,
                 filterFreq: 4000,
@@ -121,7 +121,7 @@ const CONFIG = {
                 type: 'granular',
                 grainSize: 0.05,        // Very short grains
                 grainOverlap: 0.1,
-                volume: -24,
+                volume: -28,            // dB - reduced
                 filterFreq: 2000,
                 delayTime: 0.0625,
                 delayFeedback: 0.6,

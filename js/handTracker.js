@@ -197,17 +197,20 @@ class HandTracker {
             const steadiness = Utils.clamp(1 - speed * 0.8, 0, 1);
             
             if (palmFacing) {
-                dyn.hold = Math.min(3.5, dyn.hold + delta * 1.2);
+                // Slower buildup for softer grip
+                dyn.hold = Math.min(2.5, dyn.hold + delta * 0.8);
             } else {
-                dyn.hold = Math.max(0, dyn.hold - delta * 0.5);
+                dyn.hold = Math.max(0, dyn.hold - delta * 0.4);
             }
             
-            // For grip strength, also factor in how open the hand is (inverted fist value)
+            // For grip strength - much softer calculation for slimy physics
             const openness = 1 - fist;
-            const grabTarget = palmFacing ? Utils.clamp(dyn.hold / 1.5, 0, 1) * (0.4 + steadiness * 0.6) * (0.5 + openness * 0.5) : 0;
-            dyn.grab += (grabTarget - dyn.grab) * 0.08;
+            // Reduced multipliers and cap for softer effect
+            const grabTarget = palmFacing ? Utils.clamp(dyn.hold / 2.5, 0, 0.7) * (0.3 + steadiness * 0.4) * (0.4 + openness * 0.4) : 0;
+            dyn.grab += (grabTarget - dyn.grab) * 0.06;  // Slower smoothing
             
-            const strength = Utils.clamp(dyn.grab * (0.85 + speed * 2.0), 0, 1);
+            // Softer strength calculation - less reactive to speed
+            const strength = Utils.clamp(dyn.grab * (0.5 + speed * 0.8), 0, 0.7);  // Capped at 0.7
             strengths[i] = strength;
             strengthSum += strength;
             

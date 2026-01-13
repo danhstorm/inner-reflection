@@ -94,11 +94,21 @@ class VisualEngine {
         };
         this.ringLagInitialized = false;
 
+        // Slimy physics - multi-layer momentum system
         this.handInertia = [
             new THREE.Vector2(0, 0),
             new THREE.Vector2(0, 0)
         ];
-        this.handInertiaDecay = 0.985;  // Very slow decay for lingering liquid effect
+        // Secondary momentum layer for organic trailing
+        this.handMomentum = [
+            new THREE.Vector2(0, 0),
+            new THREE.Vector2(0, 0)
+        ];
+        // Swirl momentum for circular motion continuation
+        this.handSwirl = [0, 0];
+        this.handInertiaDecay = 0.992;     // Very slow decay for long-lasting slime trail
+        this.handMomentumDecay = 0.985;    // Momentum decays slightly faster
+        this.handSwirlDecay = 0.975;       // Swirl decays even faster
         this.fastSmoothingFrames = 0;
     }
     
@@ -378,25 +388,56 @@ class VisualEngine {
             for (let i = 0; i < 2; i++) {
                 const pos = hand.positions?.[i] || { x: 0.5, y: 0.5 };
                 const vel = hand.velocities?.[i] || { x: 0, y: 0 };
-                const strength = hand.strengths?.[i] || 0;
+                const rawStrength = hand.strengths?.[i] || 0;
                 const inertia = this.handInertia[i];
-                const active = i < count && (strength > 0.01 || Math.abs(vel.x) + Math.abs(vel.y) > 0.001);
-                const impulse = active ? (0.7 + strength * 1.5) : 0;  // Stronger impulse
-                inertia.x = inertia.x * this.handInertiaDecay + vel.x * impulse;
-                inertia.y = inertia.y * this.handInertiaDecay + vel.y * impulse;
+                const momentum = this.handMomentum[i];
+                const active = i < count && (rawStrength > 0.01 || Math.abs(vel.x) + Math.abs(vel.y) > 0.001);
+                
+                // Soft slimy physics - much gentler impulse
+                // Strength is scaled down significantly for softer effect
+                const softStrength = Math.pow(rawStrength, 1.5) * 0.4;  // Exponential falloff for soft feeling
+                const impulse = active ? (0.15 + softStrength * 0.6) : 0;  // Much gentler impulse
+                
+                // Multi-layer momentum for organic slimy movement
+                // Primary inertia - immediate trailing
+                inertia.x = inertia.x * this.handInertiaDecay + vel.x * impulse * 0.7;
+                inertia.y = inertia.y * this.handInertiaDecay + vel.y * impulse * 0.7;
+                
+                // Secondary momentum - slower, heavier, like thick slime
+                momentum.x = momentum.x * this.handMomentumDecay + inertia.x * 0.1;
+                momentum.y = momentum.y * this.handMomentumDecay + inertia.y * 0.1;
+                
+                // Swirl momentum - creates circular continuation when released
+                const speed = Math.sqrt(vel.x * vel.x + vel.y * vel.y);
+                if (active && speed > 0.1) {
+                    // Cross product for rotation direction
+                    this.handSwirl[i] += (vel.x * inertia.y - vel.y * inertia.x) * 0.3;
+                }
+                this.handSwirl[i] *= this.handSwirlDecay;
+                
+                // Combined velocity with organic layering
+                const combinedVelX = inertia.x + momentum.x * 0.5;
+                const combinedVelY = inertia.y + momentum.y * 0.5;
+                
+                // Add subtle swirl to position offset
+                const swirlOffsetX = -combinedVelY * this.handSwirl[i] * 0.1;
+                const swirlOffsetY = combinedVelX * this.handSwirl[i] * 0.1;
 
                 grad.uHandPos.value[i].set(pos.x, pos.y);
-                grad.uHandVel.value[i].set(inertia.x, inertia.y);
-                grad.uHandStrength.value[i] = Math.min(strength * 1.8, 1);  // Stronger visual effect
+                grad.uHandVel.value[i].set(combinedVelX + swirlOffsetX, combinedVelY + swirlOffsetY);
+                grad.uHandStrength.value[i] = Math.min(softStrength * 0.8, 0.6);  // Capped much lower
                 disp.uHandPos.value[i].set(pos.x, pos.y);
-                disp.uHandVel.value[i].set(inertia.x, inertia.y);
-                disp.uHandStrength.value[i] = Math.min(strength * 1.8, 1);  // Stronger visual effect
+                disp.uHandVel.value[i].set(combinedVelX + swirlOffsetX, combinedVelY + swirlOffsetY);
+                disp.uHandStrength.value[i] = Math.min(softStrength * 0.8, 0.6);  // Capped much lower
             }
         } else {
             grad.uHandCount.value = 0;
             disp.uHandCount.value = 0;
+            // Continue physics simulation even without hand
             for (let i = 0; i < this.handInertia.length; i++) {
                 this.handInertia[i].multiplyScalar(this.handInertiaDecay);
+                this.handMomentum[i].multiplyScalar(this.handMomentumDecay);
+                this.handSwirl[i] *= this.handSwirlDecay;
             }
         }
         

@@ -130,7 +130,7 @@ body.interacting {
     letter-spacing: 0.6em;
     text-transform: uppercase;
     margin-bottom: 2.5rem;
-    transition: letter-spacing 1.2s cubic-bezier(0.25, 0.1, 0.25, 1), opacity 1s ease;
+    transition: letter-spacing 1.2s cubic-bezier(0.25, 0.1, 0.25, 1), opacity 1.8s ease-out;
     /* Fixed size container so clickable area doesn't shrink */
     display: inline-block;
     min-width: 90vw;
@@ -169,15 +169,15 @@ body.interacting {
 
 /* Keep filter/transform hover polish, but don't override kerning timing */
 .start-title.glass-text {
-    transition: letter-spacing 1.2s cubic-bezier(0.25, 0.1, 0.25, 1), opacity 1s ease, filter 0.5s ease, transform 0.5s ease;
+    transition: letter-spacing 1.2s cubic-bezier(0.25, 0.1, 0.25, 1), opacity 1.8s ease-out, filter 0.5s ease, transform 0.5s ease;
 }
 
 .start-title.glass-text.clicked {
-    transition: letter-spacing 0.9s cubic-bezier(0.25, 0.1, 0.25, 1), opacity 1.2s ease-out, filter 0.5s ease, transform 0.5s ease;
+    transition: letter-spacing 0.9s cubic-bezier(0.25, 0.1, 0.25, 1), opacity 2s ease-out, filter 0.5s ease, transform 0.5s ease;
 }
 
 .permissions-container {
-    transition: opacity 1s ease;
+    transition: opacity 1.8s ease-out;
 }
 
 .permissions-container.fading-out {
@@ -495,7 +495,7 @@ body.interacting {
     justify-content: space-between;
     align-items: center;
     padding: 10px 15px;
-    background: rgba(0, 0, 0, 0.75);
+    background: rgba(0, 0, 0, 0.45);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border-radius: 6px;
@@ -593,7 +593,7 @@ body.interacting {
     max-height: 70vh;
     padding: 10px;
     border: 1px solid rgba(255, 255, 255, 0.15);
-    background: rgba(0, 0, 0, 0.75);
+    background: rgba(0, 0, 0, 0.45);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border-radius: 6px;

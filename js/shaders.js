@@ -311,7 +311,8 @@ const Shaders = {
             float time = uTime * uSpeed * 0.08;
             float dropTime = uTime * uColorDropSpeed * 0.15;
 
-            // Hand-driven liquid refraction (enhanced warp with multiple effects)
+            // Hand-driven liquid refraction - soft slimy physics
+            // Gentle organic swirls like thick colorful slime
             vec2 uvFlow = uvCorrected;
             if (uHandCount > 0.0) {
                 for (int i = 0; i < 2; i++) {
@@ -321,21 +322,23 @@ const Shaders = {
                     vec2 toHand = uvFlow - uHandPos[i];
                     float dist = length(toHand);
                     
-                    // Multiple falloff zones for layered effect
-                    float innerFalloff = exp(-dist * 6.0);   // Tight inner zone - strong effect
-                    float outerFalloff = exp(-dist * 2.5);   // Wide outer zone - ripples out
-                    float midFalloff = exp(-dist * 4.0);     // Medium zone - main liquid
+                    // Soft, wide falloff zones for slimy liquid feel
+                    // Using smoother exponential curves
+                    float innerFalloff = exp(-dist * 3.5);   // Softer inner zone
+                    float outerFalloff = exp(-dist * 1.5);   // Wide gentle ripples
+                    float midFalloff = exp(-dist * 2.2);     // Organic mid-range
                     
-                    float strength = uHandStrength[i] * (0.5 + uHandInfluence * 0.7);
+                    // Reduced base strength for subtler effect
+                    float strength = uHandStrength[i] * (0.3 + uHandInfluence * 0.4);
                     
-                    // Swirl effect - rotates around hand position
-                    vec2 swirl = vec2(-toHand.y, toHand.x) * strength * midFalloff * 1.2;
+                    // Swirl effect - gentle rotation like stirring honey
+                    vec2 swirl = vec2(-toHand.y, toHand.x) * strength * midFalloff * 0.6;
                     
-                    // Drag effect - pulls in direction of hand movement
-                    vec2 drag = uHandVel[i] * strength * outerFalloff * 1.4;
+                    // Drag effect - soft trailing like thick slime
+                    vec2 drag = uHandVel[i] * strength * outerFalloff * 0.7;
                     
-                    // Bulge/squeeze effect - pushes colors outward from hand
-                    vec2 bulge = normalize(toHand + 0.0001) * strength * innerFalloff * 0.15;
+                    // Bulge effect - very gentle outward push
+                    vec2 bulge = normalize(toHand + 0.0001) * strength * innerFalloff * 0.06;
                     
                     uvFlow += swirl + drag + bulge;
                 }
@@ -1224,7 +1227,8 @@ const Shaders = {
             // Combine displacements - can be very strong
             vec2 totalDisp = disp1 + disp2 * 0.8 + disp3 * 0.6;
 
-            // Hand-driven drag - enhanced liquid refraction with layered effects
+            // Hand-driven drag - soft slimy liquid refraction
+            // Gentle organic movement like thick colorful slime
             if (uHandCount > 0.0) {
                 vec2 handWarp = vec2(0.0);
                 for (int i = 0; i < 2; i++) {
@@ -1234,28 +1238,29 @@ const Shaders = {
                     vec2 toHand = uvCorrected - uHandPos[i];
                     float dist = length(toHand);
                     
-                    // Multiple falloff zones for liquid-like layered effect
-                    float innerFalloff = exp(-dist * 5.5);   // Tight core - intense distortion
-                    float midFalloff = exp(-dist * 3.0);     // Main liquid zone
-                    float outerFalloff = exp(-dist * 1.5);   // Wide ripple zone
+                    // Soft, organic falloff zones - slimy and floaty
+                    float innerFalloff = exp(-dist * 3.0);   // Soft core
+                    float midFalloff = exp(-dist * 1.8);     // Wide liquid zone
+                    float outerFalloff = exp(-dist * 1.0);   // Very wide gentle ripples
                     
-                    float strength = uHandStrength[i] * (0.5 + uHandInfluence * 0.9);
+                    // Reduced strength for subtler, dreamier effect
+                    float strength = uHandStrength[i] * (0.3 + uHandInfluence * 0.5);
                     
-                    // Drag effect - follows hand movement (strongest in outer zone)
-                    vec2 drag = uHandVel[i] * strength * outerFalloff * 1.3;
+                    // Drag effect - soft trailing follows hand
+                    vec2 drag = uHandVel[i] * strength * outerFalloff * 0.6;
                     
-                    // Pull effect - draws toward hand center
-                    vec2 pull = -toHand * strength * midFalloff * 0.12;
+                    // Pull effect - very gentle attraction toward center
+                    vec2 pull = -toHand * strength * midFalloff * 0.04;
                     
-                    // Swirl effect - rotates around hand (strongest in middle)
-                    vec2 swirl = vec2(-toHand.y, toHand.x) * strength * midFalloff * 0.5;
+                    // Swirl effect - organic rotation like stirring
+                    vec2 swirl = vec2(-toHand.y, toHand.x) * strength * midFalloff * 0.25;
                     
-                    // Bulge/push effect - pushes refraction outward from center
-                    vec2 bulge = normalize(toHand + 0.0001) * strength * innerFalloff * 0.2;
+                    // Bulge effect - subtle outward push
+                    vec2 bulge = normalize(toHand + 0.0001) * strength * innerFalloff * 0.08;
                     
                     handWarp += drag + pull + swirl + bulge;
                 }
-                totalDisp += handWarp * 1.0;  // Full strength
+                totalDisp += handWarp * 0.5;  // Reduced overall hand contribution
             }
             
             // Apply rotation

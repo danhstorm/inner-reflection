@@ -18,6 +18,21 @@ class AudioEngine {
         // Main output
         this.masterGain = null;
         
+        // Track which parameters are under manual control (sliders)
+        // When set, modulateFromState won't override these
+        this.manualControl = {
+            masterVolume: true,
+            masterReverb: false,
+            masterDelay: false,
+            masterFilter: false,
+            droneBaseVolume: false,
+            droneMidVolume: false,
+            droneHighVolume: false,
+            droneBaseFilter: false,
+            droneMidFilter: false,
+            droneHighFilter: false
+        };
+        
         // Drone layers
         this.drones = {};
         
@@ -38,8 +53,8 @@ class AudioEngine {
         this.currentLoopIndex = 0;
         this.isCapturingLoop = false;
         this.lastLoopCaptureTime = 0;
-        this.loopCaptureInterval = 8000;  // Capture new loop every 8 seconds when sound detected
-        this.soundThreshold = 0.02;  // Minimum level to trigger loop capture
+        this.loopCaptureInterval = 12000;  // Capture new loop every 12 seconds when sound detected
+        this.soundThreshold = 0.015;  // Lower threshold for better detection
         this.lastMicLevel = 0;
         
         // Recording buffer for granular
@@ -53,6 +68,28 @@ class AudioEngine {
         // Slow evolution timers
         this.evolutionTime = 0;
         this.lastEvolutionUpdate = 0;
+        this.isMuted = false;
+        this.unmutedGain = null;
+        this.lastAudioState = null;
+        this.lastMicInput = null;
+        this.micDelayMaxTime = 30;
+        this.micDelayMaxTime2 = 60;
+        this.micDelayParams = {
+            time: 1.2,
+            time2: 2.4,
+            drift: 0.4,
+            stretch: 0.35,
+            scatter: 0.25,
+            feedback: 0.6,
+            feedbackDrift: 0.25,
+            pitch: 0,
+            pitchDrift: 0.4,
+            pitchFlutter: 0.2,
+            wow: 0.2,
+            flutter: 0.15
+        };
+        this.micDelayEvolution = null;
+        this.handDetune = 0;
         
         // Current state (for smooth transitions)
         this.state = {
@@ -66,13 +103,31 @@ class AudioEngine {
     // INITIALIZATION
     // =========================================
     
+    /**
+     * Preload audio structures without starting audio context
+     * Called during intro screen to prepare everything
+     */
+    async preload() {
+        if (this.isPreloaded) return;
+        
+        console.log('AudioEngine: Preloading structures...');
+        
+        // We can't create Tone.js nodes without audio context,
+        // but we can prepare any non-audio data structures
+        // The main benefit is that init() will be faster since
+        // code is already parsed and ready
+        
+        this.isPreloaded = true;
+        console.log('AudioEngine: Preload complete');
+    }
+    
     async init() {
         if (this.isInitialized) return;
         
         console.log('AudioEngine: Initializing...');
         
         try {
-            // Start Tone.js audio context
+            // Start Tone.js audio context (requires user interaction)
             await Tone.start();
             console.log('AudioEngine: Tone.js started');
             
@@ -94,6 +149,9 @@ class AudioEngine {
             // Create synthetic buffer for granular (in case no mic)
             await this.createSyntheticBuffer();
             
+            // Start granular layers with synthetic buffer
+            this.startGranularLayers();
+            
             // Start slow evolution timer
             this.startEvolution();
             
@@ -108,19 +166,20 @@ class AudioEngine {
     
     createMasterChain() {
         // Master limiter to prevent clipping
-        this.limiter = new Tone.Limiter(-1).toDestination();
+        this.limiter = new Tone.Limiter(-2).toDestination();
         
-        // Master compressor for glue
+        // Master compressor for consistent output
         this.compressor = new Tone.Compressor({
-            threshold: -20,
-            ratio: 4,
-            attack: 0.1,
-            release: 0.3
+            threshold: -24,
+            ratio: 8,
+            attack: 0.02,
+            release: 0.2
         }).connect(this.limiter);
         
-        // Master gain - start louder
-        this.masterGain = new Tone.Gain(Tone.dbToGain(CONFIG.audio.masterVolume + 6))
+        // Master gain - keep headroom for limiter
+        this.masterGain = new Tone.Gain(Tone.dbToGain(CONFIG.audio.masterVolume + 2))
             .connect(this.compressor);
+        this.unmutedGain = this.masterGain.gain.value;
         
         // Master filter for overall tonal control
         this.masterFilter = new Tone.Filter({
@@ -128,6 +187,10 @@ class AudioEngine {
             frequency: 8000,
             Q: 0.5
         }).connect(this.masterGain);
+
+        if (this.isMuted) {
+            this.masterGain.gain.value = 0;
+        }
     }
     
     createEffects() {
@@ -339,56 +402,218 @@ class AudioEngine {
     }
     
     // Start slow evolution of all sound parameters
+    // More pronounced changes over time
     startEvolution() {
         this.evolutionInterval = setInterval(() => {
             if (!this.isPlaying) return;
             
             this.evolutionTime += 0.1;
             
-            // Slowly evolve drone pitches (micro-detuning)
+            // Slowly evolve drone pitches (micro-detuning) - MORE noticeable
             Object.values(this.drones).forEach((drone, i) => {
                 if (drone.synth && drone.isPlaying) {
-                    const detune = Math.sin(this.evolutionTime * 0.1 + i) * 5 + 
-                                  Math.sin(this.evolutionTime * 0.07 + i * 2) * 3;
+                    const detune = Math.sin(this.evolutionTime * 0.08 + i) * 12 + 
+                                  Math.sin(this.evolutionTime * 0.05 + i * 2) * 8 +
+                                  Math.sin(this.evolutionTime * 0.03) * 5;
                     drone.synth.set({ detune });
+                    
+                    // Also evolve filter cutoff for each drone
+                    if (drone.filter) {
+                        const baseFreq = drone.filter.frequency.value || 800;
+                        const freqMod = Math.sin(this.evolutionTime * 0.04 + i * 0.5) * 300;
+                        drone.filter.frequency.rampTo(Math.max(200, baseFreq + freqMod), 2);
+                    }
                 }
             });
             
-            // Slowly evolve filter frequencies
+            // Slowly evolve ambient layer volumes - creates breathing texture
+            if (this.ambientLayers?.breathGain) {
+                const breathVol = Tone.dbToGain(-26 + Math.sin(this.evolutionTime * 0.06) * 6);
+                this.ambientLayers.breathGain.gain.rampTo(breathVol, 3);
+            }
+            
+            if (this.ambientLayers?.shimmerGain) {
+                const shimmerVol = Tone.dbToGain(-22 + Math.sin(this.evolutionTime * 0.04 + 1) * 8);
+                this.ambientLayers.shimmerGain.gain.rampTo(shimmerVol, 4);
+            }
+            
+            if (this.ambientLayers?.subGain) {
+                const subVol = Tone.dbToGain(-20 + Math.sin(this.evolutionTime * 0.025) * 5);
+                this.ambientLayers.subGain.gain.rampTo(subVol, 5);
+            }
+            
+            // Slowly evolve filter frequencies - more range
             if (this.ambientLayers?.breathFilter) {
-                const breathFreq = 300 + Math.sin(this.evolutionTime * 0.08) * 150 +
-                                  Math.sin(this.evolutionTime * 0.12) * 100;
+                const breathFreq = 400 + Math.sin(this.evolutionTime * 0.06) * 250 +
+                                  Math.sin(this.evolutionTime * 0.09) * 150;
                 this.ambientLayers.breathFilter.frequency.rampTo(breathFreq, 2);
             }
             
-            // Evolve effect parameters
-            if (this.effects.chorus) {
-                this.effects.chorus.frequency.value = 0.3 + Math.sin(this.evolutionTime * 0.05) * 0.2;
-            }
-            if (this.effects.phaser) {
-                this.effects.phaser.frequency.value = 0.15 + Math.sin(this.evolutionTime * 0.07) * 0.1;
-            }
+            // Note: Effect parameters (chorus, phaser, delay, reverb) are now controlled by sliders
+            // Automatic evolution is disabled to allow manual control
+            // The effects wet/dry levels are still controlled by state via modulateFromState
             
-            // Evolve granular parameters very slowly
+            // Granular parameters evolution - disabled when sliders are available
+            // Sliders provide direct control over grain size, playback rate, etc.
+            // Only evolve loop position which has no slider
             if (this.granularLayers) {
                 Object.values(this.granularLayers).forEach((layer, i) => {
-                    if (layer.player) {
-                        // Slowly shift grain size
-                        const baseSize = layer.config?.grainSize || 0.2;
-                        const size = baseSize * (0.8 + Math.sin(this.evolutionTime * 0.03 + i) * 0.4);
-                        layer.player.grainSize = Math.max(0.02, Math.min(1, size));
-                        
-                        // Slowly shift loop position
-                        if (layer.player.buffer?.duration) {
-                            const loopStart = (Math.sin(this.evolutionTime * 0.02 + i * 0.5) * 0.5 + 0.5) * 
-                                            (layer.player.buffer.duration * 0.8);
-                            layer.player.loopStart = loopStart;
-                        }
+                    if (layer.player && layer.player.buffer?.duration) {
+                        // Slowly shift loop position (no slider for this)
+                        const loopStart = (Math.sin(this.evolutionTime * 0.015 + i * 0.5) * 0.5 + 0.5) * 
+                                        (layer.player.buffer.duration * 0.8);
+                        layer.player.loopStart = loopStart;
                     }
                 });
             }
             
+            // Evolve mic effects if connected
+            if (this.micEffects?.filter) {
+                const micFilterFreq = 1200 + Math.sin(this.evolutionTime * 0.07) * 600;
+                this.micEffects.filter.frequency.rampTo(micFilterFreq, 2);
+            }
+            this.updateMicDelayEvolution();
+            
         }, 100);  // Update every 100ms for smooth evolution
+    }
+
+    updateMicDelayEvolution() {
+        if (!this.micEffects?.delay || !this.micEffects?.delay2) return;
+        
+        const inputBoost = Math.min(
+            1,
+            (this.lastMicInput?.volume || 0) * 2 +
+            (this.lastAudioState?.audioDelay || 0) * 0.6 +
+            (this.lastAudioState?.audioReverb || 0) * 0.3
+        );
+        
+        if (!this.micDelayEvolution) {
+            const feedbackBase = this.micDelayParams.feedback ?? 0.6;
+            this.micDelayEvolution = {
+                nextChangeAt: this.evolutionTime + 10 + Math.random() * 50,
+                targetTime: this.micDelayParams.time,
+                targetTime2: this.micDelayParams.time2,
+                currentTime: this.micDelayParams.time,
+                currentTime2: this.micDelayParams.time2,
+                targetPitch: this.micDelayParams.pitch,
+                currentPitch: this.micDelayParams.pitch,
+                targetFeedback: feedbackBase,
+                currentFeedback: feedbackBase,
+                targetFeedback2: feedbackBase * 0.85,
+                currentFeedback2: feedbackBase * 0.85
+            };
+        }
+        
+        if (this.evolutionTime >= this.micDelayEvolution.nextChangeAt) {
+            const driftScale = this.micDelayParams.drift * (0.6 + inputBoost);
+            const pitchDriftScale = this.micDelayParams.pitchDrift * (0.6 + inputBoost);
+            const stretchScale = this.micDelayParams.stretch * (0.5 + inputBoost);
+            const scatterScale = this.micDelayParams.scatter * (0.5 + inputBoost);
+            const feedbackScale = this.micDelayParams.feedbackDrift * (0.5 + inputBoost);
+            
+            const stretchRange = 0.65 * stretchScale;
+            const stretchFactor = Utils.clamp(
+                1 + Utils.random(-stretchRange, stretchRange),
+                0.3,
+                3.0
+            );
+            
+            const scatterRange = 0.6 * scatterScale;
+            const scatterOffset = Utils.random(-scatterRange, scatterRange);
+            
+            const timeOffset = Math.max(0.05, this.micDelayParams.time * 0.6) * driftScale;
+            const timeOffset2 = Math.max(0.05, this.micDelayParams.time2 * 0.6) * driftScale;
+            
+            const baseTime = this.micDelayParams.time * stretchFactor;
+            const baseTime2 = this.micDelayParams.time2 * stretchFactor;
+            
+            this.micDelayEvolution.targetTime = Utils.clamp(
+                baseTime + Utils.random(-timeOffset, timeOffset),
+                0.05,
+                this.micDelayMaxTime
+            );
+            
+            const scatteredTime2 = baseTime2 * (1 + scatterOffset);
+            const blendedTime2 = Utils.lerp(baseTime2, scatteredTime2, scatterScale);
+            this.micDelayEvolution.targetTime2 = Utils.clamp(
+                blendedTime2 + Utils.random(-timeOffset2, timeOffset2),
+                0.05,
+                this.micDelayMaxTime2
+            );
+            
+            const pitchOffset = 1200 * pitchDriftScale;
+            this.micDelayEvolution.targetPitch = this.micDelayParams.pitch +
+                Utils.random(-pitchOffset, pitchOffset);
+            
+            const feedbackBase = this.micDelayParams.feedback ?? 0.6;
+            const feedbackOffset = 0.25 * feedbackScale;
+            const targetFeedback = Utils.clamp(
+                feedbackBase + Utils.random(-feedbackOffset, feedbackOffset),
+                0.05,
+                0.95
+            );
+            const feedbackSpread = 0.12 * scatterScale;
+            
+            this.micDelayEvolution.targetFeedback = targetFeedback;
+            this.micDelayEvolution.targetFeedback2 = Utils.clamp(
+                targetFeedback * (0.85 + Utils.random(-feedbackSpread, feedbackSpread)),
+                0.05,
+                0.95
+            );
+            
+            this.micDelayEvolution.nextChangeAt = this.evolutionTime + 10 + Math.random() * 50;
+        }
+        
+        const follow = 0.01;
+        this.micDelayEvolution.currentTime +=
+            (this.micDelayEvolution.targetTime - this.micDelayEvolution.currentTime) * follow;
+        this.micDelayEvolution.currentTime2 +=
+            (this.micDelayEvolution.targetTime2 - this.micDelayEvolution.currentTime2) * follow;
+        this.micDelayEvolution.currentPitch +=
+            (this.micDelayEvolution.targetPitch - this.micDelayEvolution.currentPitch) * follow;
+        this.micDelayEvolution.currentFeedback +=
+            (this.micDelayEvolution.targetFeedback - this.micDelayEvolution.currentFeedback) * follow;
+        this.micDelayEvolution.currentFeedback2 +=
+            (this.micDelayEvolution.targetFeedback2 - this.micDelayEvolution.currentFeedback2) * follow;
+        
+        const modBoost = 0.6 + inputBoost * 0.6;
+        const wowAmount = this.micDelayParams.wow * modBoost;
+        const flutterAmount = (this.micDelayParams.flutter ?? 0) * modBoost;
+        
+        const wow1 = Math.sin(this.evolutionTime * 0.6 + 1.3) * 0.08 * wowAmount;
+        const wow2 = Math.sin(this.evolutionTime * 0.53 + 2.1) * 0.1 * wowAmount;
+        const flutterRate = 1.4 + flutterAmount * 2.2;
+        const flutter1 = Math.sin(this.evolutionTime * flutterRate + 0.9) * 0.035 * flutterAmount;
+        const flutter2 = Math.sin(this.evolutionTime * (flutterRate * 1.15) + 2.4) * 0.04 * flutterAmount;
+        
+        const delayTime = Utils.clamp(
+            this.micDelayEvolution.currentTime + wow1 + flutter1,
+            0.05,
+            this.micDelayMaxTime
+        );
+        const delayTime2 = Utils.clamp(
+            this.micDelayEvolution.currentTime2 + wow2 + flutter2,
+            0.05,
+            this.micDelayMaxTime2
+        );
+        
+        this.micEffects.delay.delayTime.rampTo(delayTime, 0.5);
+        this.micEffects.delay2.delayTime.rampTo(delayTime2, 0.5);
+        
+        const reactiveBoost = (this.lastMicInput?.volume || 0) * 0.12;
+        const feedback1 = Utils.clamp(this.micDelayEvolution.currentFeedback + reactiveBoost, 0.05, 0.95);
+        const feedback2 = Utils.clamp(this.micDelayEvolution.currentFeedback2 + reactiveBoost * 0.85, 0.05, 0.95);
+        
+        this.micEffects.delay.feedback.rampTo(feedback1, 0.25);
+        this.micEffects.delay2.feedback.rampTo(feedback2, 0.25);
+        
+        if (this.micEffects.pitchShift) {
+            const pitchFlutter = (this.micDelayParams.pitchFlutter ?? 0) * modBoost;
+            const flutterCents = Math.sin(this.evolutionTime * (0.9 + pitchFlutter * 2.4) + 0.4) *
+                90 * pitchFlutter;
+            const semitones = (this.micDelayEvolution.currentPitch + flutterCents) / 100;
+            this.micEffects.pitchShift.pitch = semitones;
+        }
     }
     
     createLFOs() {
@@ -464,12 +689,23 @@ class AudioEngine {
             return;
         }
         
+        // Convert to ToneAudioBuffer if needed
+        let toneBuffer;
+        if (audioBuffer instanceof Tone.ToneAudioBuffer) {
+            toneBuffer = audioBuffer;
+        } else if (audioBuffer instanceof AudioBuffer) {
+            toneBuffer = new Tone.ToneAudioBuffer(audioBuffer);
+        } else {
+            // Assume it's already compatible
+            toneBuffer = audioBuffer;
+        }
+        
         // Create multiple granular layers with different characteristics
         this.granularLayers = {};
         
         // Layer 1: Slow, stretched grains with lots of reverb
         this.granularLayers.ambient = this.createGranularLayer({
-            buffer: audioBuffer,
+            buffer: toneBuffer,
             grainSize: 0.4,
             overlap: 0.3,
             playbackRate: 0.5,
@@ -477,41 +713,41 @@ class AudioEngine {
             filterFreq: 800,
             filterQ: 1,
             reverbWet: 0.8,
-            delayWet: 0.4,
+            delayWet: 0.5,
             delayTime: 0.5
         });
         
-        // Layer 2: Choppy, stuttering grains
+        // Layer 2: Textural layer - gentle variations instead of choppy
         this.granularLayers.choppy = this.createGranularLayer({
-            buffer: audioBuffer,
-            grainSize: 0.05,
-            overlap: 0.02,
-            playbackRate: 1.0,
-            volume: -22,
-            filterFreq: 2000,
-            filterQ: 2,
-            reverbWet: 0.5,
+            buffer: toneBuffer,
+            grainSize: 0.25,       // Much larger grains - no clicks
+            overlap: 0.15,         // More overlap for smoothness
+            playbackRate: 0.8,     // Slightly slower
+            volume: -24,           // Quieter
+            filterFreq: 1800,
+            filterQ: 1,            // Lower Q = smoother
+            reverbWet: 0.7,        // More reverb
             delayWet: 0.6,
-            delayTime: 0.125
+            delayTime: 0.2
         });
         
-        // Layer 3: Pitched up shimmer
+        // Layer 3: Soft shimmer - no harsh high frequencies
         this.granularLayers.shimmer = this.createGranularLayer({
-            buffer: audioBuffer,
-            grainSize: 0.15,
-            overlap: 0.1,
-            playbackRate: 2.0,
-            volume: -25,
-            filterFreq: 4000,
-            filterQ: 0.5,
+            buffer: toneBuffer,
+            grainSize: 0.3,        // Larger grains
+            overlap: 0.2,          // Good overlap
+            playbackRate: 1.5,     // Less extreme pitch
+            volume: -28,           // Quieter
+            filterFreq: 3000,      // Lower cutoff
+            filterQ: 0.3,          // Very smooth
             reverbWet: 0.9,
-            delayWet: 0.3,
-            delayTime: 0.333
+            delayWet: 0.5,
+            delayTime: 0.4
         });
         
         // Layer 4: Deep, slow grains
         this.granularLayers.deep = this.createGranularLayer({
-            buffer: audioBuffer,
+            buffer: toneBuffer,
             grainSize: 0.6,
             overlap: 0.4,
             playbackRate: 0.25,
@@ -519,7 +755,7 @@ class AudioEngine {
             filterFreq: 400,
             filterQ: 3,
             reverbWet: 0.7,
-            delayWet: 0.5,
+            delayWet: 0.6,
             delayTime: 0.75
         });
         
@@ -527,16 +763,20 @@ class AudioEngine {
     }
     
     createGranularLayer(config) {
-        // Create GrainPlayer
+        // Create GrainPlayer - use buffer property for ToneAudioBuffer, not url
         const player = new Tone.GrainPlayer({
-            url: config.buffer,
             grainSize: config.grainSize,
             overlap: config.overlap,
             playbackRate: config.playbackRate,
             loop: true,
             loopStart: 0,
-            loopEnd: config.buffer.duration
+            loopEnd: config.buffer?.duration || 4
         });
+        
+        // Set buffer directly (not via url which expects a string)
+        if (config.buffer) {
+            player.buffer = config.buffer;
+        }
         
         // Filter for each layer
         const filter = new Tone.Filter({
@@ -620,49 +860,67 @@ class AudioEngine {
         this.micAnalyzer = new Tone.Analyser('waveform', 256);
         this.micGain.connect(this.micAnalyzer);
         
-        // Mic effects chain - heavily processed for texture
-        // 1. Pitch shifter effect (simulated with delay)
+        // Mic effects chain - for clear, audible processed mic sound
         this.micEffects = {};
         
-        // Reverb for mic (very wet)
+        // Reverb for mic - longer decay, moderate wet for ambience
         this.micEffects.reverb = new Tone.Reverb({
-            decay: 8,
-            wet: 0.9
+            decay: 8,        // Longer reverb tail
+            preDelay: 0.05,  // Slight pre-delay for clarity
+            wet: 1.0         // Wet only
         });
         
-        // Delay for mic (creates echoes)
-        this.micEffects.delay = new Tone.PingPongDelay({
-            delayTime: '8n',
-            feedback: 0.6,
-            wet: 0.7
+        // Delay for mic - creates evolving echoes
+        this.micEffects.delay = new Tone.FeedbackDelay({
+            delayTime: this.micDelayParams.time,
+            feedback: this.micDelayParams.feedback,      // More feedback for evolving echoes
+            maxDelay: this.micDelayMaxTime,
+            wet: 1.0
         });
         
-        // Filter to shape mic input
+        // Second delay for stereo interest
+        this.micEffects.delay2 = new Tone.FeedbackDelay({
+            delayTime: this.micDelayParams.time2,
+            feedback: this.micDelayParams.feedback * 0.85,
+            maxDelay: this.micDelayMaxTime2,
+            wet: 1.0
+        });
+
+        // Pitch shift for warped feedback tails
+        this.micEffects.pitchShift = new Tone.PitchShift({
+            pitch: 0
+        });
+        
+        // Filter to shape mic input - lowpass to smooth harsh frequencies
         this.micEffects.filter = new Tone.Filter({
-            type: 'bandpass',
-            frequency: 1200,
-            Q: 2
+            type: 'lowpass',
+            frequency: 3000,
+            Q: 0.5  // Smooth
         });
         
-        // Chorus for width
-        this.micEffects.chorus = new Tone.Chorus({
-            frequency: 0.5,
-            depth: 0.8,
-            wet: 0.5
-        }).start();
+        // Soft compressor to even out levels
+        this.micEffects.compressor = new Tone.Compressor({
+            threshold: -20,
+            ratio: 4,
+            attack: 0.1,
+            release: 0.3
+        });
         
-        // Very quiet mic to effects gain
-        this.micEffectsGain = new Tone.Gain(0.15);
+        // Gain for mic processing
+        this.micEffectsGain = new Tone.Gain(0.5);
         
-        // Connect mic -> filter -> chorus -> delay -> reverb -> gain -> master
-        this.micGain.connect(this.micEffects.filter);
-        this.micEffects.filter.connect(this.micEffects.chorus);
-        this.micEffects.chorus.connect(this.micEffects.delay);
-        this.micEffects.delay.connect(this.micEffects.reverb);
+        // Connect mic -> compressor -> filter -> delays -> pitch shift -> reverb -> gain -> master
+        this.micGain.connect(this.micEffects.compressor);
+        this.micEffects.compressor.connect(this.micEffects.filter);
+        this.micEffects.filter.connect(this.micEffects.delay);
+        this.micEffects.filter.connect(this.micEffects.delay2);  // Parallel delays
+        this.micEffects.delay.connect(this.micEffects.pitchShift);
+        this.micEffects.delay2.connect(this.micEffects.pitchShift);
+        this.micEffects.pitchShift.connect(this.micEffects.reverb);
         this.micEffects.reverb.connect(this.micEffectsGain);
         this.micEffectsGain.connect(this.masterFilter);
         
-        console.log('AudioEngine: Mic processing chain created');
+        console.log('AudioEngine: Mic processing chain created with reverb and delay');
     }
     
     // Handle real-time mic input for sound modulation
@@ -670,53 +928,47 @@ class AudioEngine {
         if (!this.isPlaying || !this.micEffects) return;
         
         const { volume, bass, mid, treble } = audioData;
+        this.lastMicInput = audioData;
         
         // Modulate mic effects based on input level
-        // Higher volume = more delay feedback, wider chorus
-        if (this.micEffects.delay) {
-            this.micEffects.delay.feedback.rampTo(0.3 + volume * 0.4, 0.1);
-        }
-        
+        // Higher volume = wider chorus
         if (this.micEffects.chorus) {
             this.micEffects.chorus.depth = 0.3 + volume * 0.5;
         }
         
-        // Filter follows frequency content
+        // Filter follows frequency content - slower ramp
         if (this.micEffects.filter) {
             const freq = 500 + bass * 500 + mid * 1000 + treble * 2000;
-            this.micEffects.filter.frequency.rampTo(freq, 0.1);
+            this.micEffects.filter.frequency.rampTo(freq, 0.5);  // Slower = smoother
         }
         
-        // Modulate granular layers based on mic input
+        // Modulate granular layers based on mic input - GENTLE modulation only
         if (this.granularLayers) {
-            // Bass triggers deep layer
+            // Bass triggers deep layer - volume only, no grain size changes
             if (this.granularLayers.deep) {
                 this.granularLayers.deep.gain.gain.rampTo(
-                    Tone.dbToGain(-20 + bass * 10), 0.2
+                    Tone.dbToGain(-22 + bass * 6), 0.5  // Slower ramp, less range
                 );
-                this.granularLayers.deep.player.grainSize = 0.4 + bass * 0.4;
             }
             
-            // Mid triggers choppy layer
+            // Mid triggers textural layer - volume only
             if (this.granularLayers.choppy) {
                 this.granularLayers.choppy.gain.gain.rampTo(
-                    Tone.dbToGain(-22 + mid * 12), 0.15
+                    Tone.dbToGain(-26 + mid * 6), 0.5  // Slower, gentler
                 );
-                this.granularLayers.choppy.player.playbackRate = 0.8 + mid * 0.8;
             }
             
-            // Treble triggers shimmer
+            // Treble triggers shimmer - volume only, no grain changes
             if (this.granularLayers.shimmer) {
                 this.granularLayers.shimmer.gain.gain.rampTo(
-                    Tone.dbToGain(-25 + treble * 15), 0.1
+                    Tone.dbToGain(-30 + treble * 8), 0.5  // Slower, quieter base
                 );
-                this.granularLayers.shimmer.player.grainSize = 0.1 + treble * 0.2;
             }
             
             // Overall volume affects ambient layer
             if (this.granularLayers.ambient) {
                 this.granularLayers.ambient.gain.gain.rampTo(
-                    Tone.dbToGain(-18 + volume * 8), 0.3
+                    Tone.dbToGain(-20 + volume * 6), 0.5  // Slower ramp
                 );
             }
         }
@@ -751,12 +1003,19 @@ class AudioEngine {
             this.micGain.connect(recorder);
             await recorder.start();
             
-            // Record for 3-5 seconds
-            const duration = 3000 + Math.random() * 2000;
+            // Record for 6-10 seconds - longer loops for more recognizable sound
+            const duration = 6000 + Math.random() * 4000;
             
             setTimeout(async () => {
                 try {
                     const recording = await recorder.stop();
+                    
+                    // Disconnect and dispose recorder
+                    try {
+                        this.micGain.disconnect(recorder);
+                        recorder.dispose();
+                    } catch (e) {}
+                    
                     const arrayBuffer = await recording.arrayBuffer();
                     const audioBuffer = await Tone.getContext().decodeAudioData(arrayBuffer);
                     const toneBuffer = new Tone.ToneAudioBuffer(audioBuffer);
@@ -771,19 +1030,21 @@ class AudioEngine {
                         const randomLayer = layers[Math.floor(Math.random() * layers.length)];
                         const layer = this.granularLayers[randomLayer];
                         
-                        if (layer?.player) {
-                            // Crossfade to new buffer (ramp down, switch, ramp up)
+                        if (layer?.player && toneBuffer?.duration > 0) {
+                            // Crossfade to new buffer (ramp down, switch, ramp up) - slower for smoothness
                             const originalGain = layer.gain.gain.value;
-                            layer.gain.gain.rampTo(0, 0.5);
+                            layer.gain.gain.rampTo(0, 1.0);  // 1 second fade out
                             
                             setTimeout(() => {
                                 try {
                                     layer.player.buffer = toneBuffer;
                                     layer.player.loopEnd = toneBuffer.duration;
-                                    layer.gain.gain.rampTo(originalGain, 0.5);
-                                    console.log(`AudioEngine: Mic loop assigned to ${randomLayer}`);
-                                } catch (e) {}
-                            }, 600);
+                                    layer.gain.gain.rampTo(originalGain, 1.0);  // 1 second fade in
+                                    console.log(`AudioEngine: Mic loop assigned to ${randomLayer} (${toneBuffer.duration.toFixed(1)}s)`);
+                                } catch (e) {
+                                    console.warn('AudioEngine: Failed to assign buffer:', e);
+                                }
+                            }, 1100);  // Wait for fade out
                         }
                     }
                     
@@ -806,29 +1067,39 @@ class AudioEngine {
         const recorder = new Tone.Recorder();
         this.micGain.connect(recorder);
         
-        // Record for 5 seconds
+        // Record for 8 seconds - longer initial recording for richer source material
         await recorder.start();
         
         setTimeout(async () => {
-            const recording = await recorder.stop();
-            
-            // Convert to audio buffer
-            const arrayBuffer = await recording.arrayBuffer();
-            const audioBuffer = await Tone.getContext().decodeAudioData(arrayBuffer);
-            
-            // Set up granular with the recorded buffer
-            await this.setupGranular(audioBuffer);
-            
-            // Start granular layers
-            this.startGranularLayers();
-            
-            console.log('AudioEngine: Initial mic recording captured for granular');
-            
-            // Store as first mic loop
-            this.micLoops[0] = new Tone.ToneAudioBuffer(audioBuffer);
-            this.currentLoopIndex = 1;
-            
-        }, 5000);
+            try {
+                const recording = await recorder.stop();
+                
+                // Disconnect recorder to prevent audio routing issues
+                this.micGain.disconnect(recorder);
+                recorder.dispose();
+                
+                // Convert to audio buffer
+                const arrayBuffer = await recording.arrayBuffer();
+                const audioBuffer = await Tone.getContext().decodeAudioData(arrayBuffer);
+                
+                // Convert to ToneAudioBuffer
+                const toneBuffer = new Tone.ToneAudioBuffer(audioBuffer);
+                
+                // Set up granular with the recorded buffer
+                await this.setupGranular(toneBuffer);
+                
+                // Start granular layers
+                this.startGranularLayers();
+                
+                console.log('AudioEngine: Initial mic recording captured for granular (8s)');
+                
+                // Store as first mic loop
+                this.micLoops[0] = toneBuffer;
+                this.currentLoopIndex = 1;
+            } catch (e) {
+                console.warn('AudioEngine: Failed to process initial mic recording:', e);
+            }
+        }, 8000);
     }
     
     startGranularLayers() {
@@ -838,7 +1109,15 @@ class AudioEngine {
             const layer = this.granularLayers[key];
             if (layer && layer.player) {
                 try {
-                    layer.player.start();
+                    // Only start if buffer is loaded and has duration
+                    if (layer.player.buffer && layer.player.buffer.duration > 0) {
+                        if (layer.player.state !== 'started') {
+                            layer.player.start();
+                            console.log(`AudioEngine: Started granular layer ${key}`);
+                        }
+                    } else {
+                        console.warn(`AudioEngine: Granular layer ${key} has no valid buffer yet`);
+                    }
                 } catch (e) {
                     console.warn(`AudioEngine: Could not start granular layer ${key}:`, e);
                 }
@@ -980,52 +1259,65 @@ class AudioEngine {
     
     modulateFromState(audioState) {
         if (!this.isPlaying || !audioState) return;
+        this.lastAudioState = audioState;
         
-        // Master volume
-        if (this.masterGain) {
+        // Master volume - only if not under manual control
+        if (this.masterGain && !this.manualControl.masterVolume) {
             const targetDb = -20 + audioState.audioVolume * 15; // -20 to -5 dB range
-            this.masterGain.gain.rampTo(Tone.dbToGain(targetDb), 0.3);
+            const targetGain = Tone.dbToGain(targetDb);
+            if (this.isMuted) {
+                this.unmutedGain = targetGain;
+            } else {
+                this.masterGain.gain.rampTo(targetGain, 0.3);
+            }
         }
         
-        // Drone volumes
-        if (this.drones.base) {
-            this.drones.base.gain.gain.rampTo(Tone.dbToGain(-15 + audioState.audioBass * 10), 0.3);
+        // Drone volumes - map state 0-1 to full slider range (-40 to 0 dB)
+        // Only apply if not under manual slider control
+        if (this.drones.base && !this.manualControl.droneBaseVolume) {
+            const baseDb = -40 + audioState.audioBass * 40; // 0→-40dB, 1→0dB
+            this.drones.base.gain.gain.rampTo(Tone.dbToGain(baseDb), 0.3);
         }
-        if (this.drones.mid) {
-            this.drones.mid.gain.gain.rampTo(Tone.dbToGain(-18 + audioState.audioMid * 10), 0.3);
+        if (this.drones.mid && !this.manualControl.droneMidVolume) {
+            const midDb = -40 + audioState.audioMid * 40;
+            this.drones.mid.gain.gain.rampTo(Tone.dbToGain(midDb), 0.3);
         }
-        if (this.drones.high) {
-            this.drones.high.gain.gain.rampTo(Tone.dbToGain(-20 + audioState.audioHigh * 12), 0.3);
+        if (this.drones.high && !this.manualControl.droneHighVolume) {
+            const highDb = -40 + audioState.audioHigh * 40;
+            this.drones.high.gain.gain.rampTo(Tone.dbToGain(highDb), 0.3);
         }
         
-        // Filter frequencies (mapped from state)
-        if (this.drones.base) {
-            const baseFreq = 80 + audioState.audioFilterBase * 400;
+        // Filter frequencies (mapped from state) - match slider ranges
+        // Only apply if not under manual slider control
+        if (this.drones.base && !this.manualControl.droneBaseFilter) {
+            const baseFreq = 50 + audioState.audioFilterBase * 950; // 50-1000 Hz
             this.drones.base.filter.frequency.rampTo(baseFreq, 0.5);
         }
-        if (this.drones.mid) {
-            const midFreq = 300 + audioState.audioFilterMid * 1500;
+        if (this.drones.mid && !this.manualControl.droneMidFilter) {
+            const midFreq = 50 + audioState.audioFilterMid * 2450; // 50-2500 Hz
             this.drones.mid.filter.frequency.rampTo(midFreq, 0.5);
         }
-        if (this.drones.high) {
+        if (this.drones.high && !this.manualControl.droneHighFilter) {
             const highFreq = 800 + audioState.audioFilterHigh * 4000;
             this.drones.high.filter.frequency.rampTo(highFreq, 0.5);
         }
         
-        // Effects
-        this.effects.reverb.wet.rampTo(0.2 + audioState.audioReverb * 0.6, 0.5);
-        this.effects.delay.wet.rampTo(0.05 + audioState.audioDelay * 0.4, 0.5);
+        // Effects wet/dry levels - only if not under manual control
+        if (this.effects.reverb && !this.manualControl.masterReverb) {
+            this.effects.reverb.wet.rampTo(0.05 + audioState.audioReverb * 0.25, 0.8);
+        }
+        if (this.effects.delay && !this.manualControl.masterDelay) {
+            this.effects.delay.wet.rampTo(0.015 + audioState.audioDelay * 0.18, 0.8);
+        }
         
-        // Chorus and phaser modulation
-        if (this.effects.chorus) {
-            this.effects.chorus.depth = 0.2 + audioState.audioModulation * 0.6;
-            this.effects.chorus.frequency.value = 0.1 + audioState.audioModulation * 2;
-        }
-        if (this.effects.phaser) {
-            this.effects.phaser.frequency.value = 0.1 + audioState.audioModulation * 0.5;
-        }
+        // Note: Chorus/phaser depth/rate are now controlled by sliders only (setGlobalEffect)
+        // This allows users to dial in specific effect settings
         
         // Granular layer modulation from state
+        // Note: Granular layer parameters are controlled directly by sliders
+        // The automatic modulation is commented out to allow manual slider control
+        // Uncomment below if you want automatic state-driven granular modulation
+        /*
         if (this.granularLayers) {
             // Ambient layer responds to overall state
             if (this.granularLayers.ambient) {
@@ -1051,16 +1343,9 @@ class AudioEngine {
                 this.granularLayers.deep.filter.frequency.rampTo(200 + audioState.audioFilterBase * 400, 0.5);
             }
         }
+        */
         
-        // Mic effects modulation
-        if (this.micEffects) {
-            if (this.micEffects.reverb) {
-                this.micEffects.reverb.wet.rampTo(0.7 + audioState.audioReverb * 0.25, 0.4);
-            }
-            if (this.micEffects.delay) {
-                this.micEffects.delay.wet.rampTo(0.4 + audioState.audioDelay * 0.4, 0.3);
-            }
-        }
+        // Mic effects wet/dry is controlled by sliders to keep dry at 0 by default
     }
     
     modulateFromAudio(audioData) {
@@ -1115,27 +1400,49 @@ class AudioEngine {
     // PARAMETER CONTROL
     // =========================================
     
-    setMasterVolume(db) {
-        if (this.masterGain) {
-            this.masterGain.gain.rampTo(Tone.dbToGain(db), 0.1);
+    setMasterVolume(db, rampTime = 0.1) {
+        if (!this.masterGain) return;
+        const gainValue = Tone.dbToGain(db);
+        this.unmutedGain = gainValue;
+        if (this.isMuted) return;
+        this.masterGain.gain.rampTo(gainValue, rampTime);
+    }
+
+    setMuted(muted) {
+        this.isMuted = muted;
+        if (!this.masterGain) return;
+        if (muted) {
+            this.unmutedGain = this.masterGain.gain.value;
+            this.masterGain.gain.rampTo(0, 0.2);
+        } else {
+            const restoreGain = this.unmutedGain ?? this.masterGain.gain.value;
+            this.masterGain.gain.rampTo(restoreGain, 0.2);
         }
     }
     
-    setDroneVolume(droneName, db) {
+    setDroneVolume(droneName, db, rampTime = 0.1) {
         if (this.drones[droneName]) {
-            this.drones[droneName].gain.gain.rampTo(Tone.dbToGain(db), 0.1);
+            this.drones[droneName].gain.gain.rampTo(Tone.dbToGain(db), rampTime);
         }
     }
     
-    setDroneFilter(droneName, frequency) {
+    setDroneFilter(droneName, frequency, rampTime = 0.2) {
         if (this.drones[droneName]) {
-            this.drones[droneName].filter.frequency.rampTo(frequency, 0.2);
+            this.drones[droneName].filter.frequency.rampTo(frequency, rampTime);
         }
     }
     
-    setEffectWet(effectName, wet) {
+    setEffectWet(effectName, wet, rampTime = 0.1) {
         if (this.effects[effectName]) {
-            this.effects[effectName].wet.rampTo(wet, 0.1);
+            this.effects[effectName].wet.rampTo(wet, rampTime);
+        }
+    }
+
+    setHandDetune(cents) {
+        const clamped = Utils.clamp(cents, -2400, 2400);
+        this.handDetune = clamped;
+        if (this.ambientLayers?.shimmerPad) {
+            this.ambientLayers.shimmerPad.set({ detune: clamped });
         }
     }
     
@@ -1161,12 +1468,20 @@ class AudioEngine {
     
     // Toggle granular layer on/off
     toggleGranularLayer(layerName, enabled) {
-        if (!this.granularLayers || !this.granularLayers[layerName]) return;
+        if (!this.granularLayers || !this.granularLayers[layerName]) {
+            console.warn(`AudioEngine: Granular layer ${layerName} not found`);
+            return;
+        }
         
         const layer = this.granularLayers[layerName];
         
         if (enabled) {
             try {
+                // Check if buffer is valid
+                if (!layer.player.buffer || layer.player.buffer.duration <= 0) {
+                    console.warn(`AudioEngine: Granular layer ${layerName} has no valid buffer`);
+                    return;
+                }
                 if (layer.player.state !== 'started') {
                     layer.player.start();
                 }
@@ -1182,14 +1497,14 @@ class AudioEngine {
     }
     
     // Set granular layer parameter
-    setGranularParam(layerName, param, value) {
+    setGranularParam(layerName, param, value, rampTime = 0.2) {
         if (!this.granularLayers || !this.granularLayers[layerName]) return;
         
         const layer = this.granularLayers[layerName];
         
         switch (param) {
             case 'volume':
-                layer.gain.gain.rampTo(Tone.dbToGain(value), 0.1);
+                layer.gain.gain.rampTo(Tone.dbToGain(value), rampTime);
                 break;
             case 'grainSize':
                 if (layer.player) layer.player.grainSize = value;
@@ -1201,19 +1516,19 @@ class AudioEngine {
                 if (layer.player) layer.player.playbackRate = value;
                 break;
             case 'filterFreq':
-                if (layer.filter) layer.filter.frequency.rampTo(value, 0.2);
+                if (layer.filter) layer.filter.frequency.rampTo(value, rampTime);
                 break;
             case 'filterQ':
-                if (layer.filter) layer.filter.Q.rampTo(value, 0.1);
+                if (layer.filter) layer.filter.Q.rampTo(value, rampTime);
                 break;
             case 'reverbWet':
-                if (layer.reverb) layer.reverb.wet.rampTo(value, 0.2);
+                if (layer.reverb) layer.reverb.wet.rampTo(value, rampTime);
                 break;
             case 'delayWet':
-                if (layer.delay) layer.delay.wet.rampTo(value, 0.1);
+                if (layer.delay) layer.delay.wet.rampTo(value, rampTime);
                 break;
             case 'delayTime':
-                if (layer.delay) layer.delay.delayTime.rampTo(value, 0.3);
+                if (layer.delay) layer.delay.delayTime.rampTo(value, rampTime);
                 break;
             case 'randomness':
                 // Store for use in generative updates
@@ -1244,22 +1559,81 @@ class AudioEngine {
     }
     
     // Set mic processing parameter
-    setMicParam(param, value) {
+    setMicParam(param, value, rampTime = 0.2) {
         switch (param) {
             case 'volume':
-                if (this.micEffectsGain) this.micEffectsGain.gain.rampTo(value, 0.1);
+                if (this.micEffectsGain) this.micEffectsGain.gain.rampTo(value, rampTime);
                 break;
             case 'filterFreq':
-                if (this.micEffects?.filter) this.micEffects.filter.frequency.rampTo(value, 0.2);
+                if (this.micEffects?.filter) this.micEffects.filter.frequency.rampTo(value, rampTime);
                 break;
             case 'reverbWet':
-                if (this.micEffects?.reverb) this.micEffects.reverb.wet.rampTo(value, 0.2);
+                if (this.micEffects?.reverb) this.micEffects.reverb.wet.rampTo(value, rampTime);
                 break;
             case 'delayWet':
-                if (this.micEffects?.delay) this.micEffects.delay.wet.rampTo(value, 0.1);
+                if (this.micEffects?.delay) this.micEffects.delay.wet.rampTo(value, rampTime);
+                break;
+            case 'delayWet2':
+                if (this.micEffects?.delay2) this.micEffects.delay2.wet.rampTo(value, rampTime);
+                break;
+            case 'delayTime':
+                this.micDelayParams.time = value;
+                if (this.micEffects?.delay) this.micEffects.delay.delayTime.rampTo(value, rampTime);
+                if (this.micDelayEvolution) {
+                    this.micDelayEvolution.currentTime = value;
+                    this.micDelayEvolution.targetTime = value;
+                }
+                break;
+            case 'delayTime2':
+                this.micDelayParams.time2 = value;
+                if (this.micEffects?.delay2) this.micEffects.delay2.delayTime.rampTo(value, rampTime);
+                if (this.micDelayEvolution) {
+                    this.micDelayEvolution.currentTime2 = value;
+                    this.micDelayEvolution.targetTime2 = value;
+                }
+                break;
+            case 'delayDrift':
+                this.micDelayParams.drift = value;
+                break;
+            case 'delayStretch':
+                this.micDelayParams.stretch = value;
+                break;
+            case 'delayScatter':
+                this.micDelayParams.scatter = value;
+                break;
+            case 'delayPitch':
+                this.micDelayParams.pitch = value;
+                if (this.micEffects?.pitchShift) this.micEffects.pitchShift.pitch = value / 100;
+                if (this.micDelayEvolution) {
+                    this.micDelayEvolution.currentPitch = value;
+                    this.micDelayEvolution.targetPitch = value;
+                }
+                break;
+            case 'delayPitchDrift':
+                this.micDelayParams.pitchDrift = value;
+                break;
+            case 'delayPitchFlutter':
+                this.micDelayParams.pitchFlutter = value;
+                break;
+            case 'delayWow':
+                this.micDelayParams.wow = value;
+                break;
+            case 'delayFlutter':
+                this.micDelayParams.flutter = value;
                 break;
             case 'delayFeedback':
-                if (this.micEffects?.delay) this.micEffects.delay.feedback.rampTo(value, 0.1);
+                this.micDelayParams.feedback = value;
+                if (this.micEffects?.delay) this.micEffects.delay.feedback.rampTo(value, rampTime);
+                if (this.micEffects?.delay2) this.micEffects.delay2.feedback.rampTo(value * 0.85, rampTime);
+                if (this.micDelayEvolution) {
+                    this.micDelayEvolution.currentFeedback = value;
+                    this.micDelayEvolution.targetFeedback = value;
+                    this.micDelayEvolution.currentFeedback2 = value * 0.85;
+                    this.micDelayEvolution.targetFeedback2 = value * 0.85;
+                }
+                break;
+            case 'delayFeedbackDrift':
+                this.micDelayParams.feedbackDrift = value;
                 break;
             case 'chorusDepth':
                 if (this.micEffects?.chorus) this.micEffects.chorus.depth = value;
@@ -1268,7 +1642,7 @@ class AudioEngine {
     }
     
     // Set global effect parameter
-    setGlobalEffect(param, value) {
+    setGlobalEffect(param, value, rampTime = 0.2) {
         switch (param) {
             case 'reverbDecay':
                 // Reverb decay requires recreation - store for next reverb
@@ -1283,7 +1657,7 @@ class AudioEngine {
                 }
                 break;
             case 'delayFeedback':
-                if (this.effects.delay) this.effects.delay.feedback.rampTo(value, 0.2);
+                if (this.effects.delay) this.effects.delay.feedback.rampTo(value, rampTime);
                 break;
             case 'chorusRate':
                 if (this.effects.chorus) this.effects.chorus.frequency.value = value;

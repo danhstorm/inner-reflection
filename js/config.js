@@ -105,7 +105,7 @@ const CONFIG = {
                 enabled: true,
                 type: 'granular',
                 frequency: 440,         // Hz (A4)
-                volume: -20,
+                volume: -35,
                 attack: 2,
                 release: 4,
                 filterFreq: 4000,
@@ -143,12 +143,12 @@ const CONFIG = {
             reverb: {
                 decay: 8,
                 preDelay: 0.1,
-                wet: 0.5
+                wet: 0.08
             },
             delay: {
                 time: 0.4,
                 feedback: 0.4,
-                wet: 0.3
+                wet: 0.04
             },
             filter: {
                 type: 'lowpass',

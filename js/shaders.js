@@ -15,9 +15,10 @@
  * - Strong chromatic aberration for color separation
  * - HSL color space for smooth hue transitions
  * 
- * Shape Modes (uShapeType 0-10):
- * 0: Concentric rings, 1: Spiral, 2: Hexagonal, 3: Diamond, 4: Square,
- * 5: Flower, 6: Star, 7: Wave interference, 8: Organic blob, 9: Folding, 10: Inverted
+ * Shape Modes (uShapeType 0-11):
+ * 0: Circles, 1: Torus, 2: Linear bands, 3: Skewed lines, 4: Cylinder,
+ * 5: Sphere, 6: Hyperboloid, 7: Spiral, 8: Parallel planes, 9: Conic,
+ * 10: Moebius, 11: Pill/Capsule
  */
 
 const Shaders = {
@@ -66,6 +67,32 @@ const Shaders = {
         uniform float uColorDropSpeed;
         uniform float uColorDropSpread;
         uniform float uColorMixIntensity;
+        
+        // Start fade - 0 = preview (very dim), 1 = full experience
+        uniform float uStartFade;
+        
+        // Brightness evolution control from slider (0-1.5)
+        uniform float uBrightnessEvolution;
+
+        // Blob controls
+        uniform float uBlobCount;
+        uniform float uBlobSpread;
+        uniform float uBlobScale;
+        uniform float uBlobMotion;
+        uniform float uBlobBlur;
+        uniform float uBlobSmear;
+        uniform float uBlobLighten;
+        uniform float uBlobInvert;
+        uniform float uBlobFade;
+        uniform float uBlobWarp;
+        uniform vec2 uBlobOffset;
+        
+        // Hand interaction
+        uniform float uHandCount;
+        uniform vec2 uHandPos[2];
+        uniform vec2 uHandVel[2];
+        uniform float uHandStrength[2];
+        uniform float uHandInfluence;
         
         varying vec2 vUv;
         
@@ -175,6 +202,99 @@ const Shaders = {
             return radius / (d * d + 0.001);
         }
         
+        // === ASYMMETRIC BLUR / SMUDGED SHAPE ===
+        // Creates an elliptical, smudged shape instead of perfect circle
+        float smudgedShape(vec2 p, vec2 center, float size, float smudgeAngle, float smudgeAmount, float softness) {
+            vec2 toCenter = p - center;
+            
+            // Rotate to smudge direction
+            float ca = cos(smudgeAngle);
+            float sa = sin(smudgeAngle);
+            vec2 rotated = vec2(toCenter.x * ca + toCenter.y * sa, -toCenter.x * sa + toCenter.y * ca);
+            
+            // Apply asymmetric scaling (more blur on one side)
+            rotated.x /= (1.0 + smudgeAmount * 0.8);  // Stretch in smudge direction
+            
+            // Asymmetric softness - softer on trailing edge
+            float dist = length(rotated);
+            float asymSoftness = softness * (1.0 + sign(rotated.x) * smudgeAmount * 0.5);
+            
+            return 1.0 - smoothstep(size - asymSoftness, size + asymSoftness * 2.0, dist);
+        }
+        
+        // Hash for pseudo-random values
+        float hash(float n) { return fract(sin(n) * 43758.5453123); }
+        float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        
+        // Golden ratio for aesthetic placement
+        const float PHI = 1.61803398875;
+        const float PI = 3.14159265359;
+        
+        // Generate aesthetic position using golden angle spiral
+        vec2 goldenPosition(float index, float time, float spread, float motion) {
+            float angle = index * PHI * PI * 2.0;
+            float radius = sqrt(index + 1.0) * spread * 0.15;
+            // Add slow time-based drift
+            angle += time * 0.01 * (1.0 + index * 0.1) * motion;
+            radius += sin(time * 0.008 * motion + index) * 0.05 * motion;
+            return vec2(0.5 + cos(angle) * radius, 0.5 + sin(angle) * radius);
+        }
+        
+        // Blend modes for glow effects
+        vec3 blendScreen(vec3 base, vec3 blend) {
+            return 1.0 - (1.0 - base) * (1.0 - blend);
+        }
+        
+        vec3 blendOverlay(vec3 base, vec3 blend) {
+            return mix(
+                2.0 * base * blend,
+                1.0 - 2.0 * (1.0 - base) * (1.0 - blend),
+                step(0.5, base)
+            );
+        }
+        
+        vec3 blendSoftLight(vec3 base, vec3 blend) {
+            return mix(
+                2.0 * base * blend + base * base * (1.0 - 2.0 * blend),
+                sqrt(base) * (2.0 * blend - 1.0) + 2.0 * base * (1.0 - blend),
+                step(0.5, blend)
+            );
+        }
+        
+        vec3 blendAdd(vec3 base, vec3 blend) {
+            return min(base + blend, vec3(1.0));
+        }
+        
+        vec3 blendLighten(vec3 base, vec3 blend) {
+            return max(base, blend);
+        }
+        
+        // Create gradient within a shape (not just solid color)
+        vec3 gradientFill(vec2 p, vec2 center, vec3 color1, vec3 color2, float gradientAngle, float gradientType) {
+            vec2 toCenter = p - center;
+            float ca = cos(gradientAngle);
+            float sa = sin(gradientAngle);
+            vec2 rotated = vec2(toCenter.x * ca + toCenter.y * sa, -toCenter.x * sa + toCenter.y * ca);
+            
+            float t;
+            if (gradientType < 0.33) {
+                // Linear gradient
+                t = rotated.x * 2.0 + 0.5;
+            } else if (gradientType < 0.66) {
+                // Radial gradient
+                t = length(toCenter) * 3.0;
+            } else {
+                // Angular gradient
+                t = (atan(toCenter.y, toCenter.x) / PI + 1.0) * 0.5;
+            }
+            t = clamp(t, 0.0, 1.0);
+            
+            // Smooth the gradient
+            t = smoothstep(0.0, 1.0, t);
+            
+            return mix(color1, color2, t);
+        }
+        
         void main() {
             vec2 uv = vUv + uOffset;
             
@@ -187,102 +307,156 @@ const Shaders = {
                 uvCorrected.y = (uv.y - 0.5) / aspectRatio + 0.5;
             }
             
-            float time = uTime * uSpeed * 0.3; // Slower overall
-            float dropTime = uTime * uColorDropSpeed * 0.5;
+            // GLACIALLY slow time - barely perceptible movement
+            float time = uTime * uSpeed * 0.08;
+            float dropTime = uTime * uColorDropSpeed * 0.15;
+
+            // Hand-driven liquid refraction (subtle warp)
+            vec2 uvFlow = uvCorrected;
+            if (uHandCount > 0.0) {
+                for (int i = 0; i < 2; i++) {
+                    if (float(i) >= uHandCount) {
+                        continue;
+                    }
+                    vec2 toHand = uvFlow - uHandPos[i];
+                    float dist = length(toHand);
+                    float falloff = exp(-dist * 5.0);
+                    float strength = uHandStrength[i] * (0.4 + uHandInfluence * 0.6);
+                    
+                    vec2 swirl = vec2(-toHand.y, toHand.x) * strength * falloff * 0.9;
+                    vec2 drag = uHandVel[i] * strength * falloff * 0.95;
+                    
+                    uvFlow += swirl + drag;
+                }
+            }
+            
+            // === START FADE - controls transition from preview to full experience ===
+            // uStartFade: 0 = preview (dim background), 1 = full experience
+            float previewDim = 0.15; // How much color shows during preview
+            float fadeMultiplier = mix(previewDim, 1.0, uStartFade);
+            
+            // === TIME-BASED BRIGHTNESS EVOLUTION ===
+            // Controlled by uBrightnessEvolution uniform (from slider)
+            // When slider is low, evolution is slow/subtle; when high, more dramatic
+            float evolutionTime = uTime * 0.012 * uBrightnessEvolution;
+            float brightnessEvolution = smoothstep(0.0, 1.0, evolutionTime) * uBrightnessEvolution;
+            brightnessEvolution += sin(evolutionTime * 0.4) * 0.15 * uBrightnessEvolution;
+            // Add slow pulsing brightness waves scaled by control
+            brightnessEvolution += smoothstep(0.3, 1.0, sin(uTime * 0.008) * 0.5 + 0.5) * 0.3 * uBrightnessEvolution;
+            brightnessEvolution = clamp(brightnessEvolution, 0.0, 1.5); // Allow over-bright
+            
+            // During preview, keep brightness very low
+            brightnessEvolution *= fadeMultiplier;
             
             // Slow, organic breathing
-            float breathing = sin(uTime * uBreathingRate * 0.3) * 0.5 + 0.5;
-            float pulse = sin(uTime * uPulseRate * 0.4) * 0.5 + 0.5;
+            float breathing = sin(uTime * uBreathingRate * 0.15) * 0.5 + 0.5;
+            float pulse = sin(uTime * uPulseRate * 0.2) * 0.5 + 0.5;
             
-            // === CONCENTRATED COLOR BLOBS ===
-            // Create 6-8 moving blob centers that drift slowly
-            vec2 blob1 = vec2(
-                0.3 + sin(time * 0.07) * 0.25 + sin(time * 0.11) * 0.1,
-                0.4 + cos(time * 0.09) * 0.2 + sin(time * 0.13) * 0.1
-            );
-            vec2 blob2 = vec2(
-                0.7 + sin(time * 0.08 + 1.0) * 0.2,
-                0.6 + cos(time * 0.06 + 2.0) * 0.25
-            );
-            vec2 blob3 = vec2(
-                0.5 + sin(time * 0.05 + 2.5) * 0.3,
-                0.3 + cos(time * 0.07 + 1.5) * 0.2
-            );
-            vec2 blob4 = vec2(
-                0.25 + sin(time * 0.06 + 4.0) * 0.15,
-                0.7 + cos(time * 0.08 + 3.0) * 0.15
-            );
-            vec2 blob5 = vec2(
-                0.8 + sin(time * 0.04 + 5.0) * 0.12,
-                0.35 + cos(time * 0.05 + 4.0) * 0.2
-            );
-            vec2 blob6 = vec2(
-                0.6 + sin(time * 0.09 + 3.0) * 0.2,
-                0.8 + cos(time * 0.07 + 5.0) * 0.12
-            );
+            // === COLOR BLOBS ===
+            // More drops with motion, blur variation, lighting, and inversion controls
+            const int MAX_BLOBS = 12;
+            float blobCount = clamp(uBlobCount, 1.0, float(MAX_BLOBS));
+            float blobSpread = mix(0.5, 1.35, uBlobSpread) * (0.7 + uColorDropSpread * 0.6);
+            float blobScale = mix(0.6, 1.6, uBlobScale);
+            float blobMotion = mix(0.4, 1.6, uBlobMotion);
+            float blobBlur = mix(0.6, 1.6, uBlobBlur);
+            float blobSmear = mix(0.2, 1.2, uBlobSmear);
+            float blobLighten = clamp(uBlobLighten, 0.0, 1.0);
+            float blobInvert = clamp(uBlobInvert, 0.0, 1.0);
+            float blobFade = mix(0.4, 1.1, uBlobFade);
+            vec2 blobOffset = uBlobOffset;
             
-            // Blob sizes that breathe
-            float size1 = 0.04 + breathing * 0.02;
-            float size2 = 0.035 + pulse * 0.015;
-            float size3 = 0.045 + breathing * 0.025;
-            float size4 = 0.03 + pulse * 0.02;
-            float size5 = 0.025 + breathing * 0.015;
-            float size6 = 0.038 + pulse * 0.018;
+            // Base colors (2 per drop for gradients) - brighter and more saturated
+            float baseBright = uBrightness * (0.8 + brightnessEvolution * 0.5);
+            float baseSat = uSaturation * 1.15;
             
-            // Calculate metaball influence for each color
-            float field1 = metaball(uvCorrected, blob1, size1) + 
-                          metaball(uvCorrected, blob4, size4 * 0.7);
-            float field2 = metaball(uvCorrected, blob2, size2) + 
-                          metaball(uvCorrected, blob5, size5 * 0.8);
-            float field3 = metaball(uvCorrected, blob3, size3);
-            float field4 = metaball(uvCorrected, blob6, size6);
-            
-            // Add some gentle noise to the fields for organic edges
-            float noise1 = fbm(vec3(uvCorrected * 2.0, time * 0.1), 2.0) * 0.3;
-            float noise2 = fbm(vec3(uvCorrected * 2.5 + 50.0, time * 0.08), 2.0) * 0.25;
-            
-            field1 += noise1;
-            field2 += noise2;
-            field3 += noise1 * 0.8;
-            field4 += noise2 * 0.7;
-            
-            // Create sharp-edged concentrated blobs with smooth falloff
-            float threshold = uColorDropSpread * 1.5 + 0.3;
-            float edge = 0.15; // Edge softness
-            
-            float blob1Strength = smoothstep(threshold - edge, threshold + edge * 0.5, field1);
-            float blob2Strength = smoothstep(threshold - edge, threshold + edge * 0.5, field2);
-            float blob3Strength = smoothstep(threshold - edge * 0.8, threshold + edge * 0.3, field3);
-            float blob4Strength = smoothstep(threshold - edge * 0.6, threshold + edge * 0.4, field4);
-            
-            // Create 4 colors with good saturation
-            float darkBrightness = uBrightness * 0.65;
-            vec3 color1 = hsl2rgb(uHue1, uSaturation * 0.95, darkBrightness);
-            vec3 color2 = hsl2rgb(uHue2, uSaturation * 0.9, darkBrightness * 1.1);
-            vec3 color3 = hsl2rgb(uHue3, uSaturation * 0.85, darkBrightness * 0.95);
-            vec3 color4 = hsl2rgb(uHue4, uSaturation * 0.88, darkBrightness * 1.05);
-            
-            // Dark base color (very dark, almost black with hint of hue1)
-            vec3 baseColor = hsl2rgb(uHue1, uSaturation * 0.3, 0.08);
-            
-            // Build color by layering concentrated blobs
+            // Base color - NEUTRAL dark base so color blobs stand out
+            // Not affected by hue controls - those only affect the floating blobs
+            float baseLight = 0.08 + brightnessEvolution * 0.12;
+            vec3 baseColor = vec3(baseLight * 0.9, baseLight * 0.95, baseLight); // Slightly cool neutral
             vec3 color = baseColor;
             
-            // Layer blobs with smooth mixing - concentrated areas of color
-            float mixStrength = uColorMixIntensity;
-            color = mix(color, color1, blob1Strength * mixStrength);
-            color = mix(color, color2, blob2Strength * mixStrength * 0.95);
-            color = mix(color, color3, blob3Strength * mixStrength * 0.9);
-            color = mix(color, color4, blob4Strength * mixStrength * 0.85);
+            // === RENDER EACH DROP ===
+            float mixStrength = uColorMixIntensity * (0.8 + brightnessEvolution * 0.4);
             
-            // Subtle glow/bleed around blob edges
-            float edgeGlow = max(max(blob1Strength, blob2Strength), max(blob3Strength, blob4Strength));
-            edgeGlow = smoothstep(0.0, 0.5, edgeGlow) - smoothstep(0.5, 1.0, edgeGlow);
-            vec3 glowColor = mix(color2, color3, pulse);
-            color = mix(color, glowColor, edgeGlow * 0.15 * breathing);
+            for (int i = 0; i < MAX_BLOBS; i++) {
+                float fi = float(i);
+                if (fi > blobCount - 1.0) {
+                    continue;
+                }
+                
+                float seed = hash(fi * 12.37 + 0.17);
+                float seed2 = hash(fi * 4.71 + 1.31);
+                float seed3 = hash(fi * 7.19 + 2.73);
+                
+                float life = smoothstep(0.2, 0.8, sin(uTime * (0.004 + seed * 0.006) * blobFade + fi * 1.7) * 0.5 + 0.5);
+                life = pow(life, mix(1.4, 0.8, uBlobFade));
+                
+                vec2 pos = goldenPosition(fi, time * blobMotion, blobSpread, blobMotion);
+                pos = clamp(pos + blobOffset, vec2(0.05), vec2(0.95));
+                
+                float size = (0.12 + 0.12 * seed2 + breathing * 0.05 + pulse * 0.05) * blobScale;
+                float smudgeAngle = time * (0.02 + seed * 0.08) + fi;
+                float smudgeAmount = (0.2 + seed3 * 0.8) * blobSmear;
+                float softness = (0.08 + seed2 * 0.12) * blobBlur;
+                
+                vec2 uvBlob = uvFlow;
+                if (uBlobWarp > 0.001) {
+                    float warp1 = snoise(vec3(uvFlow * 2.0 + fi, time * 0.03));
+                    float warp2 = snoise(vec3(uvFlow * 2.4 - fi, time * 0.025));
+                    uvBlob += vec2(warp1, warp2) * uBlobWarp * 0.05;
+                }
+                
+                float shape = smudgedShape(
+                    uvBlob, pos, size,
+                    smudgeAngle, smudgeAmount, softness
+                ) * life;
+                
+                if (shape > 0.001) {
+                    float huePick = mod(fi, 4.0);
+                    float hueBase = (huePick < 0.5) ? uHue1 : (huePick < 1.5) ? uHue2 : (huePick < 2.5) ? uHue3 : uHue4;
+                    float hueA = fract(hueBase + (seed - 0.5) * 0.2);
+                    float hueB = fract(hueBase + 0.08 + (seed2 - 0.5) * 0.2);
+                    
+                    vec3 colorA = hsl2rgb(hueA, baseSat * (0.8 + seed * 0.3), baseBright * (0.85 + seed2 * 0.6));
+                    vec3 colorB = hsl2rgb(hueB, baseSat * (0.75 + seed3 * 0.35), baseBright * (0.9 + seed * 0.5));
+                    
+                    float gradAngle = time * (0.015 + seed * 0.08) + fi;
+                    float gradType = fract(time * (0.002 + seed2 * 0.004) + seed);
+                    
+                    vec3 dropColor = gradientFill(
+                        uvBlob, pos,
+                        colorA, colorB,
+                        gradAngle, gradType
+                    );
+                    
+                    float blend = fract(time * (0.002 + seed3 * 0.005) + fi * 0.17);
+                    vec3 blended;
+                    
+                    if (blend < 0.2) {
+                        blended = dropColor;
+                    } else if (blend < 0.4) {
+                        blended = blendScreen(color, dropColor);
+                    } else if (blend < 0.6) {
+                        blended = blendAdd(color, dropColor * 0.75);
+                    } else if (blend < 0.8) {
+                        blended = blendSoftLight(color, dropColor);
+                    } else {
+                        blended = blendLighten(color, dropColor);
+                    }
+                    
+                    float lightenMix = step(0.6, seed3) * blobLighten;
+                    blended = mix(blended, blendAdd(color, dropColor * (0.7 + seed2 * 0.6)), lightenMix);
+                    
+                    float invertMix = step(0.7, seed) * blobInvert;
+                    blended = mix(blended, vec3(1.0) - blended, invertMix);
+                    
+                    color = mix(color, blended, shape * mixStrength * (0.7 + fi * 0.03));
+                }
+            }
             
             // Subtle warm/cool shift
-            float warmShift = (uWarmth - 0.5) * 0.06;
+            float warmShift = (uWarmth - 0.5) * 0.05;
             color.r += warmShift;
             color.b -= warmShift;
             
@@ -326,6 +500,10 @@ const Shaders = {
         
         // Primary displacement center (typically face position)
         uniform vec2 uCenter;           // 0-1 normalized position
+        uniform vec2 uCenterLag1;       // Delayed center for outer rings
+        uniform vec2 uCenterLag2;
+        uniform vec2 uCenterLag3;
+        uniform float uRingDelayMix;    // 0-1 blend amount for lagged center
         uniform float uRings;           // Number of concentric rings (6-16)
         uniform float uMaxRadius;       // Outer extent of effect
         uniform float uMinRadius;       // Inner core size
@@ -334,6 +512,8 @@ const Shaders = {
         uniform float uRotation;        // Overall rotation angle
         uniform float uWobble;          // Organic edge deformation
         uniform float uChromaticAberration;  // RGB separation amount
+        uniform float uRingOverlayStrength;  // Extra ring edge refraction
+        uniform float uRingOverlayWidth;     // Ring line thickness
         
         // Secondary displacement origins for layered effects
         uniform vec2 uRipple2Center;
@@ -342,11 +522,19 @@ const Shaders = {
         uniform float uRipple3Strength;
         
         // Shape and style parameters
-        uniform float uShapeType;       // 0-10: concentric, spiral, hex, diamond, square, flower, star, wave, organic, fold, invert
+        uniform float uShapeType;       // 0-11: circles, torus, linear, skewed, cylinder, sphere, hyperboloid, spiral, parallel, conic, moebius, pill
         uniform float uMorphProgress;   // Blend between current and morph target shape
         uniform float uMorphType;       // Target shape for morphing
         uniform float uInversion;       // 0-1: invert displacement direction
         uniform float uFoldAmount;      // 0-1: rings fold back on themselves
+        
+        // Parallel planes controls
+        uniform float uParallelStrength;
+        uniform float uParallelZoom;
+        uniform float uParallelZoomDrift;
+        uniform float uParallelSpin;
+        uniform float uParallelThickness;
+        uniform float uParallelPresence;
         
         // Wave motion - creates flowing, delayed ring movement
         uniform float uWavePhase;       // Global animation phase
@@ -365,6 +553,13 @@ const Shaders = {
         uniform float uBreathingPhase;
         uniform float uDepthPhase;     // For 3D slice feel
         
+        // Hand interaction
+        uniform float uHandCount;
+        uniform vec2 uHandPos[2];
+        uniform vec2 uHandVel[2];
+        uniform float uHandStrength[2];
+        uniform float uHandInfluence;
+        
         varying vec2 vUv;
         
         #define PI 3.14159265359
@@ -382,16 +577,33 @@ const Shaders = {
             float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
             return mix(b, a, h) - k * h * (1.0 - h);
         }
+
+        // Apply distance-based lag so outer rings follow later center positions
+        vec2 applyCenterLag(vec2 uv, vec2 center, vec2 lag1, vec2 lag2, vec2 lag3, float mixAmount) {
+            if (mixAmount <= 0.001) return center;
+            
+            float dist = length(uv - center);
+            float t = clamp(dist / max(uMaxRadius, 0.0001), 0.0, 1.0);
+            
+            vec2 lagged = mix(center, lag1, smoothstep(0.12, 0.42, t));
+            lagged = mix(lagged, lag2, smoothstep(0.38, 0.72, t));
+            lagged = mix(lagged, lag3, smoothstep(0.65, 0.95, t));
+            
+            return mix(center, lagged, mixAmount);
+        }
         
         // ===========================================
         // WAVE MOTION CALCULATION
         // Each ring has its own delayed phase creating cascading movement
+        // Like old-school video echo effect - center moves first, outer rings follow
         // ===========================================
         
         // Calculate wave offset for a specific ring - this creates the flowing delayed motion
         float getRingWaveOffset(float ringIndex, float totalRings, float phase, float delay, float amplitude) {
-            // Each ring's phase is delayed based on its index
-            float ringPhase = phase - ringIndex * delay;
+            // Each ring's phase is significantly delayed based on its index
+            // Multiply delay for more dramatic cascade effect (like video echo)
+            float cascadeDelay = delay * 2.5;
+            float ringPhase = phase - ringIndex * cascadeDelay;
             
             // Primary wave - slow undulation
             float wave1 = sin(ringPhase) * amplitude;
@@ -402,9 +614,9 @@ const Shaders = {
             // Tertiary wave - even faster, creates ripple texture
             float wave3 = sin(ringPhase * 4.7 + 1.2) * amplitude * uTertiaryWave;
             
-            // Combine waves - outer rings have stronger effect
-            float ringFactor = (ringIndex + 1.0) / totalRings;
-            return (wave1 + wave2 + wave3) * ringFactor;
+            // Combine waves - outer rings have MUCH stronger effect for dramatic cascade
+            float ringFactor = pow((ringIndex + 1.0) / totalRings, 0.6);
+            return (wave1 + wave2 + wave3) * ringFactor * 1.5;
         }
         
         // ===========================================
@@ -483,12 +695,12 @@ const Shaders = {
             // Smooth sinusoidal waves instead of fract for sharp rings
             float waveValue = sin((dist + waveOffset) / uMaxRadius * rings * PI) * 0.5 + 0.5;
             
-            // Very soft edges - large edge value
-            float edge = uEdgeSharpness * 3.0 + 0.3;
+            // Sharper edges - reduced minimum softness
+            float edge = uEdgeSharpness * 1.5 + 0.25;
             float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
             
-            // Smooth gradient, not sharp lensing
-            return softness * 1.2;
+            // Strong contrast gradient
+            return softness * 1.5;
         }
         
         // Shape 1: Torus slice - soft elliptical gradients
@@ -513,11 +725,11 @@ const Shaders = {
             float waveOffset = getRingWaveOffset(0.0, rings, phase, delay, uWaveAmplitude);
             float waveValue = sin((abs(torusDist) + waveOffset) * rings * 1.5 + phase * 0.05) * 0.5 + 0.5;
             
-            // Very soft edges
-            float edge = uEdgeSharpness * 2.5 + 0.25;
+            // Sharper edges
+            float edge = uEdgeSharpness * 1.5 + 0.25;
             float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
             
-            return softness * 1.2;
+            return softness * 1.4;
         }
         
         // Shape 2: Linear bands - soft flowing gradients across screen
@@ -538,11 +750,11 @@ const Shaders = {
             float waveOffset = getRingWaveOffset(0.0, rings, phase, delay, uWaveAmplitude * 1.2);
             float waveValue = sin((lineDist + waveOffset) * rings * 0.8 * PI) * 0.5 + 0.5;
             
-            // Very soft edges for flowing gradient
-            float edge = uEdgeSharpness * 3.0 + 0.35;
+            // Sharper edges for clearer bands
+            float edge = uEdgeSharpness * 1.5 + 0.3;
             float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
             
-            return softness * 1.3;
+            return softness * 1.5;
         }
         
         // Shape 3: Skewed lines - diagonal bands with perspective
@@ -570,7 +782,7 @@ const Shaders = {
             float waveValue = sin((lineDist + waveOffset) * rings * 0.6 * widthMod * PI) * 0.5 + 0.5;
             
             // Very soft edge
-            float edge = uEdgeSharpness * 2.5 + 0.3;
+            float edge = uEdgeSharpness * 2.0 + 0.4;
             float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
             
             return softness * 1.3;
@@ -610,7 +822,7 @@ const Shaders = {
             float waveValue = sin((dist + waveOffset) / uMaxRadius * rings * PI * 0.8) * 0.5 + 0.5;
             
             // Soft edges
-            float edge = uEdgeSharpness * 2.5 + 0.25;
+            float edge = uEdgeSharpness * 2.0 + 0.35;
             float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
             
             return softness * (1.0 + stretch * 0.1);
@@ -641,8 +853,8 @@ const Shaders = {
             // Soft wave instead of sharp rings
             float waveValue = sin((dist + waveOffset * 0.5) * rings * PI) * 0.5 + 0.5;
             
-            // Soft edge
-            float edge = uEdgeSharpness * 2.5 + 0.25;
+            // Sharper edges
+            float edge = uEdgeSharpness * 1.5 + 0.3;
             float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
             
             // Add depth-based intensity
@@ -672,7 +884,7 @@ const Shaders = {
             float waveValue = sin((hyperDist + waveOffset) / uMaxRadius * rings * PI * 0.9) * 0.5 + 0.5;
             
             // Soft edge
-            float edge = uEdgeSharpness * 2.5 + 0.25;
+            float edge = uEdgeSharpness * 2.0 + 0.35;
             float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
             
             return softness * 1.3;
@@ -698,7 +910,7 @@ const Shaders = {
             float waveValue = sin((spiralDist + waveOffset * 0.3) * rings * PI) * 0.5 + 0.5;
             
             // Soft edge
-            float edge = uEdgeSharpness * 2.5 + 0.25;
+            float edge = uEdgeSharpness * 2.0 + 0.35;
             float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
             
             return softness * 1.2;
@@ -706,40 +918,54 @@ const Shaders = {
         
         // Shape 8: Parallel planes - creates interference pattern
         float shapeParallelPlanes(vec2 uv, vec2 center, float rings, float phase, float delay) {
+            // Early exit if parallel lines are disabled
+            if (uParallelStrength < 0.01 && uParallelPresence < 0.01) {
+                return 0.0;
+            }
+            
             vec2 toCenter = uv - center;
             
             // Two sets of parallel lines at different angles
-            float angle1 = phase * 0.05;
-            float angle2 = phase * 0.05 + PI * 0.5 + sin(phase * 0.08) * 0.3;
+            float spin = mix(0.02, 0.12, uParallelSpin);
+            float angle1 = phase * spin;
+            float angle2 = phase * spin + PI * 0.5 + sin(phase * 0.08) * 0.3;
+            
+            float zoomBase = mix(0.6, 1.6, uParallelZoom);
+            float zoomPulse = 1.0 + sin(phase * (0.04 + uParallelZoomDrift * 0.2)) * uParallelZoomDrift * 0.35;
+            vec2 scaled = toCenter * zoomBase * zoomPulse;
             
             vec2 dir1 = vec2(cos(angle1), sin(angle1));
             vec2 dir2 = vec2(cos(angle2), sin(angle2));
             
-            float dist1 = dot(toCenter, dir1);
-            float dist2 = dot(toCenter, dir2);
+            float dist1 = dot(scaled, dir1);
+            float dist2 = dot(scaled, dir2);
             
             // Create bands from both directions
-            float bandIndex1 = floor((dist1 + 1.0) * rings * 0.3);
-            float bandIndex2 = floor((dist2 + 1.0) * rings * 0.3);
+            float bandScale = mix(0.22, 0.45, uParallelThickness);
+            float bandIndex1 = floor((dist1 + 1.0) * rings * bandScale);
+            float bandIndex2 = floor((dist2 + 1.0) * rings * bandScale);
             float waveOffset1 = getRingWaveOffset(abs(bandIndex1), rings, phase, delay, uWaveAmplitude);
             float waveOffset2 = getRingWaveOffset(abs(bandIndex2), rings, phase * 1.1, delay * 0.9, uWaveAmplitude);
             
-            float band1 = fract((dist1 + 1.0 + waveOffset1) * rings * 0.3);
-            float band2 = fract((dist2 + 1.0 + waveOffset2) * rings * 0.3);
+            float band1 = fract((dist1 + 1.0 + waveOffset1) * rings * bandScale);
+            float band2 = fract((dist2 + 1.0 + waveOffset2) * rings * bandScale);
             
             // Soft sinusoidal waves
             float wave1 = sin(band1 * PI * 2.0) * 0.5 + 0.5;
             float wave2 = sin(band2 * PI * 2.0) * 0.5 + 0.5;
             
             // Soft edges
-            float edge = uEdgeSharpness * 2.5 + 0.3;
+            float edge = uEdgeSharpness * (1.2 + uParallelThickness) + mix(0.18, 0.45, uParallelThickness);
             float soft1 = smoothstep(0.0, edge, wave1) * smoothstep(1.0, 1.0 - edge, wave1);
             float soft2 = smoothstep(0.0, edge, wave2) * smoothstep(1.0, 1.0 - edge, wave2);
             
-            // Combine with interference
-            float combined = max(soft1, soft2) + soft1 * soft2 * 0.5;
+            // Combine with interference - reduced base multiplier
+            float combined = max(soft1, soft2) + soft1 * soft2 * 0.3;
+            float presence = smoothstep(0.2, 0.8, sin(phase * 0.05 + uParallelPresence * 2.0) * 0.5 + 0.5);
+            float appear = mix(0.0, presence, uParallelPresence);
             
-            return combined * 1.2;
+            // Stronger scaling by strength - allows full turn off
+            return combined * 0.25 * uParallelStrength * uParallelStrength * appear;
         }
         
         // Shape 9: Cone slice - conic sections (circles, ellipses, parabolas, hyperbolas)
@@ -772,7 +998,7 @@ const Shaders = {
             float waveValue = sin(blendedDist / uMaxRadius * rings * PI * 0.9) * 0.5 + 0.5;
             
             // Soft edge
-            float edge = uEdgeSharpness * 2.5 + 0.25;
+            float edge = uEdgeSharpness * 2.0 + 0.35;
             float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
             
             return softness * 1.3;
@@ -802,7 +1028,7 @@ const Shaders = {
             float waveValue = sin((twistedDist + waveOffset) / uMaxRadius * rings * PI) * 0.5 + 0.5;
             
             // Soft edge
-            float edge = uEdgeSharpness * 2.5 + 0.25;
+            float edge = uEdgeSharpness * 2.0 + 0.35;
             float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
             
             return softness * 1.3;
@@ -829,7 +1055,7 @@ const Shaders = {
             float waveValue = sin((abs(pillDist) + waveOffset) / uMaxRadius * rings * PI * 0.8) * 0.5 + 0.5;
             
             // Very soft edges for smooth glow
-            float edge = uEdgeSharpness * 3.0 + 0.35;
+            float edge = uEdgeSharpness * 2.5 + 0.45;
             float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
             
             // Inside vs outside the pill - soft glow inside
@@ -884,8 +1110,10 @@ const Shaders = {
             float shapeUpper = getShapeValue(upperShape, uv, center, uRings, phase, delay);
             float shapeValue = mix(shapeLower, shapeUpper, blendFactor);
             
-            // Smooth optical effect - keep gradients soft
-            shapeValue = pow(shapeValue, 1.2) * 1.8;
+            // SOFTEN the shape value to prevent harsh edges
+            // Clamp to reasonable range and apply smoothing
+            shapeValue = clamp(shapeValue, 0.0, 2.0);
+            shapeValue = pow(shapeValue, 1.5) * 1.2;  // Gentler power curve
             
             // Organic wobble for softer movement
             float wobble = sin(angle * 2.0 + phase * 0.1) * uWobble * 1.5;
@@ -912,10 +1140,20 @@ const Shaders = {
             }
             
             // Softer fades for full-screen coverage
-            float innerFade = smoothstep(0.0, uMinRadius * 2.0, dist);
-            float outerFade = smoothstep(uMaxRadius * 2.0, uMaxRadius * 0.7, dist);
+            float innerFade = smoothstep(0.0, uMinRadius * 3.0, dist);
+            float outerFade = smoothstep(uMaxRadius * 2.0, uMaxRadius * 0.5, dist);
             
-            return direction * displaceAmount * innerFade * outerFade;
+            // Final displacement with smooth falloff
+            vec2 result = direction * displaceAmount * innerFade * outerFade;
+            
+            // Limit maximum displacement to prevent extreme artifacts
+            float maxDisp = 0.15;
+            float resultLen = length(result);
+            if (resultLen > maxDisp) {
+                result = result * (maxDisp / resultLen);
+            }
+            
+            return result;
         }
         
         void main() {
@@ -945,24 +1183,56 @@ const Shaders = {
             vec2 center1 = uCenter;
             vec2 center2 = uRipple2Center;
             vec2 center3 = uRipple3Center;
+            vec2 lag1 = uCenterLag1;
+            vec2 lag2 = uCenterLag2;
+            vec2 lag3 = uCenterLag3;
             
             if (aspectRatio > 1.0) {
                 center1.x = (center1.x - 0.5) * aspectRatio + 0.5;
                 center2.x = (center2.x - 0.5) * aspectRatio + 0.5;
                 center3.x = (center3.x - 0.5) * aspectRatio + 0.5;
+                lag1.x = (lag1.x - 0.5) * aspectRatio + 0.5;
+                lag2.x = (lag2.x - 0.5) * aspectRatio + 0.5;
+                lag3.x = (lag3.x - 0.5) * aspectRatio + 0.5;
             } else {
                 center1.y = (center1.y - 0.5) / aspectRatio + 0.5;
                 center2.y = (center2.y - 0.5) / aspectRatio + 0.5;
                 center3.y = (center3.y - 0.5) / aspectRatio + 0.5;
+                lag1.y = (lag1.y - 0.5) / aspectRatio + 0.5;
+                lag2.y = (lag2.y - 0.5) / aspectRatio + 0.5;
+                lag3.y = (lag3.y - 0.5) / aspectRatio + 0.5;
             }
             
+            vec2 center1Lagged = applyCenterLag(uvCorrected, center1, lag1, lag2, lag3, uRingDelayMix);
+            
             // Calculate displacement from each origin with different shapes
-            vec2 disp1 = calculateDisplacement(uvCorrected, center1, uStrength * strengthMod, uShapeType, wavePhase, waveDelay);
+            vec2 disp1 = calculateDisplacement(uvCorrected, center1Lagged, uStrength * strengthMod, uShapeType, wavePhase, waveDelay);
             vec2 disp2 = calculateDisplacement(uvCorrected, center2, uRipple2Strength * strengthMod, uShapeType + 1.0, wavePhase * 1.1, waveDelay * 0.85);
             vec2 disp3 = calculateDisplacement(uvCorrected, center3, uRipple3Strength * strengthMod, uShapeType + 2.0, wavePhase * 0.9, waveDelay * 1.15);
             
             // Combine displacements - can be very strong
             vec2 totalDisp = disp1 + disp2 * 0.8 + disp3 * 0.6;
+
+            // Hand-driven drag - pulls and swirls the refraction field
+            if (uHandCount > 0.0) {
+                vec2 handWarp = vec2(0.0);
+                for (int i = 0; i < 2; i++) {
+                    if (float(i) >= uHandCount) {
+                        continue;
+                    }
+                    vec2 toHand = uvCorrected - uHandPos[i];
+                    float dist = length(toHand);
+                    float falloff = exp(-dist * 4.6);
+                    float strength = uHandStrength[i] * (0.4 + uHandInfluence * 0.8);
+                    
+                    vec2 drag = uHandVel[i] * strength * falloff * 0.85;
+                    vec2 pull = -toHand * strength * falloff * 0.08;
+                    vec2 swirl = vec2(-toHand.y, toHand.x) * strength * falloff * 0.35;
+                    
+                    handWarp += drag + pull + swirl;
+                }
+                totalDisp += handWarp * 0.8;
+            }
             
             // Apply rotation
             totalDisp = rotate2d(uRotation * 0.5) * totalDisp;
@@ -973,8 +1243,19 @@ const Shaders = {
             
             // Morph between current and alternate shape
             if (uMorphProgress > 0.01) {
-                vec2 morphDisp = calculateDisplacement(uvCorrected, center1, uStrength * strengthMod, uMorphType, wavePhase * 1.2, waveDelay * 0.7);
+                vec2 morphDisp = calculateDisplacement(uvCorrected, center1Lagged, uStrength * strengthMod, uMorphType, wavePhase * 1.2, waveDelay * 0.7);
                 totalDisp = mix(totalDisp, morphDisp, uMorphProgress);
+            }
+            
+            if (uRingOverlayStrength > 0.001) {
+                vec2 ringVec = uvCorrected - center1Lagged;
+                float ringDist = length(ringVec) / max(uMaxRadius, 0.0001);
+                float ringPhase = ringDist * uRings;
+                float ringBand = abs(fract(ringPhase) - 0.5);
+                float width = mix(0.015, 0.14, uRingOverlayWidth);
+                float ringMask = smoothstep(width, 0.0, ringBand);
+                vec2 ringDir = normalize(ringVec + 0.0001);
+                totalDisp += ringDir * ringMask * uRingOverlayStrength * 0.08;
             }
             
             // Convert back to UV space (undo aspect correction)
@@ -985,10 +1266,14 @@ const Shaders = {
             }
             
             vec2 finalUv = uv + totalDisp;
+            vec2 uvClamp = clamp(finalUv, vec2(0.005), vec2(0.995));
             
             // Strong chromatic aberration based on displacement magnitude
             float dispMagnitude = length(totalDisp);
-            float aberration = uChromaticAberration * (0.8 + dispMagnitude * 5.0);
+            float edgeDist = min(min(uvClamp.x, 1.0 - uvClamp.x), min(uvClamp.y, 1.0 - uvClamp.y));
+            float edgeFade = smoothstep(0.0, 0.12, edgeDist);
+            float aberration = uChromaticAberration * (0.6 + dispMagnitude * 4.0);
+            aberration = min(aberration, 0.05) * edgeFade;
             vec2 aberrationDir = normalize(totalDisp + 0.0001);
             
             // Aspect-correct the aberration direction
@@ -999,9 +1284,11 @@ const Shaders = {
             }
             
             // Sample with chromatic aberration - creates the color separation
-            float r = texture2D(uTexture, finalUv + aberrationDir * aberration * 1.2).r;
-            float g = texture2D(uTexture, finalUv).g;
-            float b = texture2D(uTexture, finalUv - aberrationDir * aberration * 1.2).b;
+            vec2 uvR = clamp(uvClamp + aberrationDir * aberration * 1.2, vec2(0.001), vec2(0.999));
+            vec2 uvB = clamp(uvClamp - aberrationDir * aberration * 1.2, vec2(0.001), vec2(0.999));
+            float r = texture2D(uTexture, uvR).r;
+            float g = texture2D(uTexture, uvClamp).g;
+            float b = texture2D(uTexture, uvB).b;
             
             vec3 color = vec3(r, g, b);
             
@@ -1032,6 +1319,7 @@ const Shaders = {
         uniform float uBlur;
         uniform float uGlow;
         uniform float uVignette;
+        uniform float uVignetteShape;
         uniform float uSaturation;
         uniform float uBrightness;
         uniform float uContrast;
@@ -1094,12 +1382,52 @@ const Shaders = {
             float luminance = dot(glowColor, vec3(0.299, 0.587, 0.114));
             color += glowColor * smoothstep(0.5, 1.0, luminance) * uGlow * 0.5;
             
-            // NO VIGNETTE - removed as requested
-            
-            // Color adjustments - darker overall
+            // Color adjustments - apply saturation BOOST before brightness
+            // This keeps colors vivid even when brightness increases
             color = adjustSaturation(color, uSaturation);
             color = adjustContrast(color, uContrast);
-            color *= uBrightness * 0.85; // Darken overall
+            
+            // Brightness that preserves color vibrancy:
+            // Instead of simple multiply (which washes out), we use a curve
+            // that lifts darks while keeping highlights saturated
+            float brightFactor = uBrightness;
+            // Apply brightness via power curve to preserve saturation
+            color = pow(color, vec3(1.0 / max(brightFactor, 0.1)));
+            // Boost saturation slightly to counteract any wash-out
+            color = adjustSaturation(color, 1.0 + (brightFactor - 1.0) * 0.3);
+            
+            // === VIGNETTE - adjustable from rectangle → pill → circle ===
+            // uVignette controls amount (0 = none, 0.5 = edges black, 1 = deep inward)
+            // uVignetteShape controls geometry (0 = rectangle, 0.5 = pill, 1 = circle)
+            
+            if (uVignette > 0.001) {
+                vec2 centered = uv - 0.5;
+                float aspect = uResolution.x / uResolution.y;
+                vec2 p = vec2(centered.x * aspect, centered.y);
+                vec2 halfSize = vec2(0.5 * aspect, 0.5);
+                vec2 norm = vec2(p.x / halfSize.x, p.y / halfSize.y);
+                vec2 n = abs(norm);
+                
+                float shape = clamp(uVignetteShape, 0.0, 1.0);
+                float exponent = shape < 0.5
+                    ? mix(20.0, 4.0, shape * 2.0)
+                    : mix(4.0, 2.0, (shape - 0.5) * 2.0);
+                
+                float super = pow(pow(n.x, exponent) + pow(n.y, exponent), 1.0 / exponent);
+                float edgeDist = max(0.0, 1.0 - super);
+                
+                float amount = clamp(uVignette, 0.0, 1.0);
+                float edgeMix = smoothstep(0.0, 0.5, amount);
+                float expand = smoothstep(0.5, 1.0, amount);
+                float baseFade = mix(0.15, 0.45, edgeMix);
+                float fadeEnd = mix(baseFade, 0.85, expand);
+                
+                float vignette = smoothstep(0.0, fadeEnd, edgeDist);
+                vignette = mix(1.0, vignette, edgeMix);
+                vignette = pow(vignette, mix(1.0, 2.2, expand));
+                
+                color *= vignette;
+            }
             
             // Subtle film grain / noise
             float noise = hash(uv * uResolution + uTime * 100.0) * 2.0 - 1.0;
@@ -1192,7 +1520,33 @@ const Shaders = {
                 // Organic color drop parameters
                 uColorDropSpeed: { value: 0.05 },
                 uColorDropSpread: { value: 0.5 },
-                uColorMixIntensity: { value: 0.7 }
+                uColorMixIntensity: { value: 0.7 },
+                
+                // Start fade - controls preview vs full experience
+                uStartFade: { value: 0 },
+                
+                // Brightness evolution control (from slider)
+                uBrightnessEvolution: { value: 0.5 },
+                
+                // Blob controls
+                uBlobCount: { value: 10 },
+                uBlobSpread: { value: 0.75 },
+                uBlobScale: { value: 0.9 },
+                uBlobMotion: { value: 0.5 },
+                uBlobBlur: { value: 0.7 },
+                uBlobSmear: { value: 0.7 },
+                uBlobLighten: { value: 0.25 },
+                uBlobInvert: { value: 0.15 },
+                uBlobFade: { value: 0.7 },
+                uBlobWarp: { value: 0.3 },
+                uBlobOffset: { value: new THREE.Vector2(0, 0) },
+                
+                // Hand interaction
+                uHandCount: { value: 0 },
+                uHandPos: { value: [new THREE.Vector2(0.5, 0.5), new THREE.Vector2(0.5, 0.5)] },
+                uHandVel: { value: [new THREE.Vector2(0, 0), new THREE.Vector2(0, 0)] },
+                uHandStrength: { value: [0, 0] },
+                uHandInfluence: { value: 0.5 }
             },
             vertexShader: this.gradientVertex,
             fragmentShader: this.gradientFragment
@@ -1208,6 +1562,10 @@ const Shaders = {
                 
                 // Primary ripple
                 uCenter: { value: new THREE.Vector2(0.5, 0.5) },
+                uCenterLag1: { value: new THREE.Vector2(0.5, 0.5) },
+                uCenterLag2: { value: new THREE.Vector2(0.5, 0.5) },
+                uCenterLag3: { value: new THREE.Vector2(0.5, 0.5) },
+                uRingDelayMix: { value: 0.35 },
                 uRings: { value: 10 },
                 uMaxRadius: { value: 1.0 },
                 uMinRadius: { value: 0.02 },
@@ -1216,6 +1574,8 @@ const Shaders = {
                 uRotation: { value: 0 },
                 uWobble: { value: 0.04 },
                 uChromaticAberration: { value: 0.04 },
+                uRingOverlayStrength: { value: 0.35 },
+                uRingOverlayWidth: { value: 0.35 },
                 
                 // Additional ripple origins
                 uRipple2Center: { value: new THREE.Vector2(0.3, 0.3) },
@@ -1223,12 +1583,20 @@ const Shaders = {
                 uRipple3Center: { value: new THREE.Vector2(0.7, 0.7) },
                 uRipple3Strength: { value: 0.2 },
                 
-                // Shape and style (0-10 different modes)
+                // Shape and style (0-11 different modes)
                 uShapeType: { value: 0 },
                 uMorphProgress: { value: 0 },
                 uMorphType: { value: 0 },
                 uInversion: { value: 0 },
                 uFoldAmount: { value: 0 },
+                
+                // Parallel planes controls
+                uParallelStrength: { value: 0.16 },
+                uParallelZoom: { value: 0.42 },
+                uParallelZoomDrift: { value: 0.25 },
+                uParallelSpin: { value: 0.25 },
+                uParallelThickness: { value: 0.28 },
+                uParallelPresence: { value: 0.12 },
                 
                 // Wave motion - critical for flowing movement
                 uWavePhase: { value: 0 },
@@ -1244,7 +1612,14 @@ const Shaders = {
                 // Global modulation
                 uIntensity: { value: 0.6 },
                 uBreathingPhase: { value: 0 },
-                uDepthPhase: { value: 0 }
+                uDepthPhase: { value: 0 },
+                
+                // Hand interaction
+                uHandCount: { value: 0 },
+                uHandPos: { value: [new THREE.Vector2(0.5, 0.5), new THREE.Vector2(0.5, 0.5)] },
+                uHandVel: { value: [new THREE.Vector2(0, 0), new THREE.Vector2(0, 0)] },
+                uHandStrength: { value: [0, 0] },
+                uHandInfluence: { value: 0.5 }
             },
             vertexShader: this.displacementVertex,
             fragmentShader: this.displacementFragment
@@ -1259,7 +1634,8 @@ const Shaders = {
                 uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
                 uBlur: { value: 0.2 },
                 uGlow: { value: 0.15 },
-                uVignette: { value: 0 },  // No vignette
+                uVignette: { value: 0 },
+                uVignetteShape: { value: 0.5 },  // 0 = rectangular, 1 = oval
                 uSaturation: { value: 1.1 },
                 uBrightness: { value: 0.85 },  // Darker
                 uContrast: { value: 1.05 },

@@ -46,6 +46,60 @@ class VisualEngine {
         // Particles
         this.particles = null;
         this.particleVelocities = null;
+        
+        // === START FADE - controls transition from preview to full experience ===
+        // 0 = preview (dim), 1 = full experience
+        this.startFade = 0;
+        this.startFadeTarget = 0;
+        
+        // === SMOOTH BUFFER FOR ALL VISUAL VALUES (ANTI-GLITCH) ===
+        // These smoothed values ensure EVERY parameter transitions gradually
+        // No sudden jumps - everything flows like water
+        this.smoothBuffer = {
+            // Position
+            centerX: 0.5,
+            centerY: 0.5,
+            ripple2X: 0.3,
+            ripple2Y: 0.3,
+            ripple3X: 0.7,
+            ripple3Y: 0.7,
+            // Displacement
+            strength: 0.5,
+            radius: 0.7,
+            rings: 8,
+            wobble: 0.1,
+            chromatic: 0.2,
+            // Shape
+            shapeType: 0,
+            rotation: 0,
+            // Effects
+            blur: 0.3,
+            glow: 0.2,
+            vignette: 0,
+            // Secondary ripples
+            ripple2Strength: 0.3,
+            ripple3Strength: 0.2,
+            // Wave parameters
+            waveDelay: 0.4,
+            waveAmplitude: 0.05,
+            edgeSharpness: 0.03,
+            minRadius: 0.05
+        };
+        
+        // Ring lag centers for delayed motion
+        this.ringLagCenters = {
+            lag1: new THREE.Vector2(0.5, 0.5),
+            lag2: new THREE.Vector2(0.5, 0.5),
+            lag3: new THREE.Vector2(0.5, 0.5)
+        };
+        this.ringLagInitialized = false;
+
+        this.handInertia = [
+            new THREE.Vector2(0, 0),
+            new THREE.Vector2(0, 0)
+        ];
+        this.handInertiaDecay = 0.96;
+        this.fastSmoothingFrames = 0;
     }
     
     // =========================================
@@ -215,6 +269,14 @@ class VisualEngine {
         this.time += deltaTime * 0.3;
         this.breathingPhase += deltaTime * (visualState?.breathingRate || 0.05) * 0.5;
         
+        if (visualState) {
+            this.updateRingLagCenters(
+                deltaTime,
+                { x: visualState.displacementX, y: visualState.displacementY },
+                visualState.ringDelay
+            );
+        }
+        
         // Update all shader uniforms from state
         this.updateShadersFromState(visualState);
         
@@ -250,6 +312,10 @@ class VisualEngine {
             this.renderer.autoClear = true;
         }
     }
+
+    boostSmoothing(frames = 12) {
+        this.fastSmoothingFrames = Math.max(this.fastSmoothingFrames, frames);
+    }
     
     updateShadersFromState(state) {
         if (!state) return;
@@ -257,6 +323,11 @@ class VisualEngine {
         const grad = this.materials.gradient.uniforms;
         const disp = this.materials.displacement.uniforms;
         const post = this.materials.post.uniforms;
+        
+        // === SMOOTHLY INTERPOLATE START FADE ===
+        const fadeSpeed = 0.008; // Slow fade-in over ~2-3 seconds
+        this.startFade += (this.startFadeTarget - this.startFade) * fadeSpeed;
+        grad.uStartFade.value = this.startFade;
         
         // Gradient uniforms - more colors, darker
         grad.uHue1.value = state.colorHue1;
@@ -275,26 +346,127 @@ class VisualEngine {
         grad.uBreathingRate.value = state.breathingRate;
         grad.uPulseRate.value = state.pulseRate;
         
+        // Brightness evolution control (from slider)
+        grad.uBrightnessEvolution.value = state.brightnessEvolution || 0.5;
+        
         // Organic color drop parameters
         grad.uColorDropSpeed.value = state.colorDropSpeed || 0.05;
         grad.uColorDropSpread.value = state.colorDropSpread || 0.5;
         grad.uColorMixIntensity.value = state.colorMixIntensity || 0.7;
         
-        // Displacement uniforms - stronger refraction with focus mode
-        disp.uCenter.value.set(state.displacementX, state.displacementY);
-        disp.uStrength.value = state.displacementStrength;
-        disp.uMaxRadius.value = state.displacementRadius;
-        disp.uRings.value = state.displacementRings;
-        disp.uRotation.value = state.displacementRotation;
-        disp.uWobble.value = state.displacementWobble;
-        disp.uChromaticAberration.value = state.displacementChromatic;
-        disp.uRipple2Center.value.set(state.rippleOrigin2X || 0.3, state.rippleOrigin2Y || 0.3);
-        disp.uRipple2Strength.value = state.rippleOrigin2Strength || 0;
-        disp.uRipple3Center.value.set(state.rippleOrigin3X || 0.7, state.rippleOrigin3Y || 0.7);
-        disp.uRipple3Strength.value = state.rippleOrigin3Strength || 0;
+        // Blob controls (manual parameters)
+        grad.uBlobCount.value = state.blobCount ?? 10;
+        grad.uBlobSpread.value = state.blobSpread ?? 0.75;
+        grad.uBlobScale.value = state.blobScale ?? 0.9;
+        grad.uBlobMotion.value = state.blobMotion ?? 0.5;
+        grad.uBlobBlur.value = state.blobBlur ?? 0.7;
+        grad.uBlobSmear.value = state.blobSmear ?? 0.7;
+        grad.uBlobLighten.value = state.blobLighten ?? 0.25;
+        grad.uBlobInvert.value = state.blobInvert ?? 0.15;
+        grad.uBlobFade.value = state.blobFade ?? 0.7;
+        grad.uBlobWarp.value = state.blobWarp ?? 0.3;
+        grad.uBlobOffset.value.set(state.blobOffsetX ?? 0, state.blobOffsetY ?? 0);
         
-        // Shape and style - new parameters
-        disp.uShapeType.value = state.shapeType || 0;
+        const hand = state.hand;
+        if (hand) {
+            const count = Math.min(hand.count || 0, 2);
+            grad.uHandCount.value = count;
+            grad.uHandInfluence.value = hand.influence ?? 0.5;
+            disp.uHandCount.value = count;
+            disp.uHandInfluence.value = hand.influence ?? 0.5;
+            
+            for (let i = 0; i < 2; i++) {
+                const pos = hand.positions?.[i] || { x: 0.5, y: 0.5 };
+                const vel = hand.velocities?.[i] || { x: 0, y: 0 };
+                const strength = hand.strengths?.[i] || 0;
+                const inertia = this.handInertia[i];
+                const active = i < count && (strength > 0.01 || Math.abs(vel.x) + Math.abs(vel.y) > 0.001);
+                const impulse = active ? (0.5 + strength * 1.0) : 0;
+                inertia.x = inertia.x * this.handInertiaDecay + vel.x * impulse;
+                inertia.y = inertia.y * this.handInertiaDecay + vel.y * impulse;
+
+                grad.uHandPos.value[i].set(pos.x, pos.y);
+                grad.uHandVel.value[i].set(inertia.x, inertia.y);
+                grad.uHandStrength.value[i] = Math.min(strength * 1.45, 1);
+                disp.uHandPos.value[i].set(pos.x, pos.y);
+                disp.uHandVel.value[i].set(inertia.x, inertia.y);
+                disp.uHandStrength.value[i] = Math.min(strength * 1.45, 1);
+            }
+        } else {
+            grad.uHandCount.value = 0;
+            disp.uHandCount.value = 0;
+            for (let i = 0; i < this.handInertia.length; i++) {
+                this.handInertia[i].multiplyScalar(this.handInertiaDecay);
+            }
+        }
+        
+        // === CRITICAL: SMOOTH BUFFER FOR ALL VISUAL PARAMETERS ===
+        // This ensures EVERY parameter transitions smoothly - no jumps allowed
+        // Even if sliders change instantly, the visuals morph gradually
+        const fastSmoothing = this.fastSmoothingFrames > 0;
+        const smoothFactor = fastSmoothing ? 0.08 : 0.008;  // Smooth interpolation rate
+        const slowFactor = fastSmoothing ? 0.04 : 0.004;    // Extra slow for discrete values like rings/shape
+        if (fastSmoothing) {
+            this.fastSmoothingFrames = Math.max(0, this.fastSmoothingFrames - 1);
+        }
+        
+        // Smooth all center positions
+        this.smoothBuffer.centerX += (state.displacementX - this.smoothBuffer.centerX) * smoothFactor;
+        this.smoothBuffer.centerY += (state.displacementY - this.smoothBuffer.centerY) * smoothFactor;
+        this.smoothBuffer.ripple2X += ((state.rippleOrigin2X || 0.3) - this.smoothBuffer.ripple2X) * smoothFactor;
+        this.smoothBuffer.ripple2Y += ((state.rippleOrigin2Y || 0.3) - this.smoothBuffer.ripple2Y) * smoothFactor;
+        this.smoothBuffer.ripple3X += ((state.rippleOrigin3X || 0.7) - this.smoothBuffer.ripple3X) * smoothFactor;
+        this.smoothBuffer.ripple3Y += ((state.rippleOrigin3Y || 0.7) - this.smoothBuffer.ripple3Y) * smoothFactor;
+        
+        // Smooth displacement parameters
+        this.smoothBuffer.strength += (state.displacementStrength - this.smoothBuffer.strength) * smoothFactor;
+        this.smoothBuffer.radius += (state.displacementRadius - this.smoothBuffer.radius) * smoothFactor;
+        this.smoothBuffer.rings += (state.displacementRings - this.smoothBuffer.rings) * slowFactor; // Very slow for rings
+        this.smoothBuffer.wobble += (state.displacementWobble - this.smoothBuffer.wobble) * smoothFactor;
+        this.smoothBuffer.chromatic += (state.displacementChromatic - this.smoothBuffer.chromatic) * smoothFactor;
+        
+        // Shape type - VERY slow for smooth morphing between shapes
+        this.smoothBuffer.shapeType += ((state.shapeType || 0) - this.smoothBuffer.shapeType) * slowFactor * 0.5;
+        
+        // Smooth rotation (handle wraparound carefully)
+        let rotDiff = state.displacementRotation - this.smoothBuffer.rotation;
+        while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
+        while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
+        this.smoothBuffer.rotation += rotDiff * smoothFactor;
+        
+        // Smooth ripple strengths
+        this.smoothBuffer.ripple2Strength += ((state.rippleOrigin2Strength || 0) - this.smoothBuffer.ripple2Strength) * smoothFactor;
+        this.smoothBuffer.ripple3Strength += ((state.rippleOrigin3Strength || 0) - this.smoothBuffer.ripple3Strength) * smoothFactor;
+        
+        // Smooth wave parameters
+        this.smoothBuffer.waveDelay += ((state.waveDelay || 0.4) - this.smoothBuffer.waveDelay) * smoothFactor;
+        this.smoothBuffer.waveAmplitude += ((state.waveAmplitude || 0.05) - this.smoothBuffer.waveAmplitude) * smoothFactor;
+        this.smoothBuffer.edgeSharpness += ((state.edgeSharpness || 0.02) - this.smoothBuffer.edgeSharpness) * smoothFactor;
+        this.smoothBuffer.minRadius += ((state.minRadius || 0.05) - this.smoothBuffer.minRadius) * smoothFactor;
+        
+        // Smooth post-processing - reduced blur default for sharper circles
+        this.smoothBuffer.blur += ((state.blur || 0.1) - this.smoothBuffer.blur) * smoothFactor;
+        this.smoothBuffer.glow += ((state.glow || 0.2) - this.smoothBuffer.glow) * smoothFactor;
+        this.smoothBuffer.vignette += ((state.vignette ?? 0) - (this.smoothBuffer.vignette ?? 0)) * smoothFactor;
+        
+        // === APPLY SMOOTHED VALUES TO DISPLACEMENT SHADER ===
+        disp.uCenter.value.set(this.smoothBuffer.centerX, this.smoothBuffer.centerY);
+        disp.uCenterLag1.value.set(this.ringLagCenters.lag1.x, this.ringLagCenters.lag1.y);
+        disp.uCenterLag2.value.set(this.ringLagCenters.lag2.x, this.ringLagCenters.lag2.y);
+        disp.uCenterLag3.value.set(this.ringLagCenters.lag3.x, this.ringLagCenters.lag3.y);
+        disp.uRingDelayMix.value = state.ringDelay ?? 0.35;
+        disp.uStrength.value = Math.min(this.smoothBuffer.strength, 3.5);  // Higher cap for stronger circles
+        disp.uMaxRadius.value = this.smoothBuffer.radius;
+        disp.uRings.value = this.smoothBuffer.rings;  // Now smooth!
+        disp.uWobble.value = this.smoothBuffer.wobble;
+        disp.uChromaticAberration.value = Math.min(this.smoothBuffer.chromatic, 0.4);
+        disp.uRipple2Center.value.set(this.smoothBuffer.ripple2X, this.smoothBuffer.ripple2Y);
+        disp.uRipple2Strength.value = this.smoothBuffer.ripple2Strength;
+        disp.uRipple3Center.value.set(this.smoothBuffer.ripple3X, this.smoothBuffer.ripple3Y);
+        disp.uRipple3Strength.value = this.smoothBuffer.ripple3Strength;
+        
+        // Shape and style - USE SMOOTHED VALUES
+        disp.uShapeType.value = this.smoothBuffer.shapeType;  // Smooth morphing
         disp.uMorphProgress.value = state.morphProgress;
         disp.uMorphType.value = state.morphType;
         disp.uFoldAmount.value = state.foldAmount || 0.5;
@@ -302,33 +474,74 @@ class VisualEngine {
         
         disp.uIntensity.value = state.overallIntensity;
         
-        // Wave motion uniforms - THE KEY TO FLOWING DELAYED MOVEMENT
-        const waveSpeed = state.waveSpeed || 1.0;
-        disp.uWavePhase.value = this.time * waveSpeed * 0.6;  // Wave phase with controllable speed
-        disp.uWaveDelay.value = state.waveDelay || 0.5;  // Delay between rings
-        disp.uWaveAmplitude.value = state.waveAmplitude || 0.08;  // How much rings move
-        disp.uSecondaryWave.value = state.secondaryWave || 0.3;  // Secondary wave intensity
-        disp.uTertiaryWave.value = state.tertiaryWave || 0.1;  // Tertiary wave intensity
-        disp.uSizeWave.value = 0.1 + state.breathingRate * 0.3;
+        // Wave motion uniforms - use smoothed values
+        const waveSpeed = state.waveSpeed || 0.3;
+        disp.uWavePhase.value = this.time * waveSpeed * 0.15;
+        disp.uWaveDelay.value = this.smoothBuffer.waveDelay;
+        disp.uWaveAmplitude.value = this.smoothBuffer.waveAmplitude * 0.5;
+        disp.uSecondaryWave.value = (state.secondaryWave || 0.3) * 0.5;  // Reduced secondary
+        disp.uTertiaryWave.value = (state.tertiaryWave || 0.1) * 0.3;  // Reduced tertiary
+        disp.uSizeWave.value = 0.05 + state.breathingRate * 0.15;  // Smaller size wave
+        
+        // Ring overlay (manual)
+        disp.uRingOverlayStrength.value = state.ringOverlayStrength ?? 0.35;
+        disp.uRingOverlayWidth.value = state.ringOverlayWidth ?? 0.35;
+        
+        // Parallel plane controls (manual)
+        disp.uParallelStrength.value = state.parallelStrength ?? 0.16;
+        disp.uParallelZoom.value = state.parallelZoom ?? 0.42;
+        disp.uParallelZoomDrift.value = state.parallelZoomDrift ?? 0.25;
+        disp.uParallelSpin.value = state.parallelSpin ?? 0.25;
+        disp.uParallelThickness.value = state.parallelThickness ?? 0.28;
+        disp.uParallelPresence.value = state.parallelPresence ?? 0.12;
         
         // Edge and shape controls
         disp.uEdgeSharpness.value = state.edgeSharpness || 0.03;  // Ring edge transition
-        disp.uMinRadius.value = state.minRadius || 0.05;  // Center hole size
-        const rotation = (state.shapeRotation || 0) + this.time * (state.rotationSpeed || 0);
-        disp.uRotation.value = rotation;  // Combined static + animated rotation
+        disp.uMinRadius.value = this.smoothBuffer.minRadius;  // Smoothed center hole size
+        disp.uEdgeSharpness.value = this.smoothBuffer.edgeSharpness;  // Smoothed edge
         
-        // Depth phase for 3D slice feel
+        // Rotation - USE SMOOTHED VALUE combined with MUCH SLOWER animated rotation
+        const animatedRotation = this.time * (state.rotationSpeed || 0) * 0.1;  // 10x slower rotation
+        disp.uRotation.value = this.smoothBuffer.rotation + animatedRotation;
+        
+        // Depth phase for 3D slice feel - slower
         disp.uBreathingPhase.value = this.breathingPhase;
-        disp.uDepthPhase.value = this.time * 0.15;  // Slow depth pulse
+        disp.uDepthPhase.value = this.time * 0.04;  // Much slower depth pulse
         
-        // Post-processing uniforms - darker, no vignette
-        post.uBlur.value = state.blur;
-        post.uGlow.value = state.glow * 0.5;  // Reduced glow
-        post.uVignette.value = 0;  // No vignette
+        // Post-processing uniforms - USE SMOOTHED VALUES
+        post.uBlur.value = this.smoothBuffer.blur;
+        post.uGlow.value = this.smoothBuffer.glow * 0.6;
+        post.uVignette.value = this.smoothBuffer.vignette ?? state.vignette ?? 0;  // 0 = no vignette
+        post.uVignetteShape.value = state.vignetteShape ?? 0.5;  // 0=rectangular, 1=oval
         post.uSaturation.value = state.saturationPost;
-        post.uBrightness.value = state.brightnessPost * 0.85;  // Darker
+        post.uBrightness.value = state.brightnessPost;
         post.uContrast.value = state.contrastPost;
         post.uNoiseAmount.value = state.noiseAmount;
+    }
+
+    updateRingLagCenters(deltaTime, center, delayAmount) {
+        if (!center) return;
+        
+        if (!this.ringLagInitialized) {
+            this.ringLagCenters.lag1.set(center.x, center.y);
+            this.ringLagCenters.lag2.set(center.x, center.y);
+            this.ringLagCenters.lag3.set(center.x, center.y);
+            this.ringLagInitialized = true;
+        }
+        
+        const delay = Utils.clamp(delayAmount ?? 0.35, 0, 1);
+        const baseSpeed = Utils.clamp(0.2 - delay * 0.16, 0.02, 0.2);
+        const dt = Utils.clamp(deltaTime * 60, 0, 1);
+        
+        const step = (lag, speed) => {
+            const t = Utils.clamp(speed * dt, 0, 1);
+            lag.x += (center.x - lag.x) * t;
+            lag.y += (center.y - lag.y) * t;
+        };
+        
+        step(this.ringLagCenters.lag1, baseSpeed);
+        step(this.ringLagCenters.lag2, baseSpeed * 0.65);
+        step(this.ringLagCenters.lag3, baseSpeed * 0.45);
     }
     
     updateParticles(deltaTime, state) {
@@ -419,6 +632,22 @@ class VisualEngine {
     
     modulateFromMotion(motionData) {
         // Now handled through StateEngine
+    }
+    
+    // =========================================
+    // START FADE CONTROL
+    // =========================================
+    
+    // Call this when the experience starts to fade in the visuals
+    startExperienceFade() {
+        this.startFadeTarget = 1;
+        console.log('VisualEngine: Starting experience fade-in');
+    }
+    
+    // Call this to reset to preview mode
+    resetToPreview() {
+        this.startFade = 0;
+        this.startFadeTarget = 0;
     }
     
     // =========================================

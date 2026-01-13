@@ -296,6 +296,18 @@ class InputManager {
     getCameraStream() {
         return this.cameraStream;
     }
+
+    stopCamera() {
+        if (this.cameraStream) {
+            this.cameraStream.getTracks().forEach(track => track.stop());
+            this.cameraStream = null;
+        }
+        if (this.videoElement) {
+            this.videoElement.pause();
+            this.videoElement.srcObject = null;
+        }
+        this.enabled.camera = false;
+    }
     
     // =========================================
     // ACCELEROMETER / DEVICE MOTION

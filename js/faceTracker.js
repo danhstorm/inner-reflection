@@ -47,6 +47,7 @@ class FaceTracker {
         this.faceDetection = null;
         this.camera = null;
         this.useFaceMesh = false;
+        this.maxFaces = 2;
         
         // Video element
         this.videoElement = null;
@@ -120,7 +121,7 @@ class FaceTracker {
     }
     
     initSmoothers() {
-        const defaultSmoothing = 0.7;
+        const defaultSmoothing = 0.45;
         const features = [
             'faceX', 'faceY', 'faceSize',
             'headYaw', 'headPitch', 'headRoll',
@@ -163,7 +164,7 @@ class FaceTracker {
             });
             
             this.faceMesh.setOptions({
-                maxNumFaces: 1,
+                maxNumFaces: this.maxFaces,
                 refineLandmarks: true, // Enables iris tracking
                 minDetectionConfidence: 0.5,
                 minTrackingConfidence: 0.5
@@ -179,6 +180,14 @@ class FaceTracker {
         } catch (error) {
             console.error('FaceTracker: Face Mesh init failed:', error);
             return this.initFallback(videoElement);
+        }
+    }
+
+    setMaxFaces(count) {
+        const next = Math.max(1, Math.min(count, 5));
+        this.maxFaces = next;
+        if (this.faceMesh && this.faceMesh.setOptions) {
+            this.faceMesh.setOptions({ maxNumFaces: this.maxFaces });
         }
     }
     
@@ -289,14 +298,15 @@ class FaceTracker {
             return;
         }
         
-        const landmarks = results.multiFaceLandmarks[0];
+        const faces = results.multiFaceLandmarks.slice(0, this.maxFaces);
         const now = performance.now();
         
-        // Calculate all features
-        const features = this.extractAllFeatures(landmarks);
+        // Calculate features for each face, then combine
+        const featuresList = faces.map((face) => this.extractAllFeatures(face));
+        const combinedFeatures = this.combineFeatures(featuresList);
         
         // Apply smoothing
-        const smoothed = this.smoothFeatures(features);
+        const smoothed = this.smoothFeatures(combinedFeatures);
         
         // Detect temporal events (blinks, talking)
         const events = this.detectEvents(smoothed, now);
@@ -304,6 +314,8 @@ class FaceTracker {
         // Build complete face data
         this.faceData = {
             detected: true,
+            faceCount: featuresList.length,
+            faces: combinedFeatures.faces || [],
             
             // Position & Size
             faceX: smoothed.faceX,
@@ -339,7 +351,7 @@ class FaceTracker {
             engagement: this.calculateEngagement(smoothed, events),
             
             // Raw landmarks for advanced use
-            landmarks: landmarks
+            landmarks: faces
         };
         
         // Update detection state
@@ -354,6 +366,49 @@ class FaceTracker {
         if (events.justBlinked && this.onBlink) {
             this.onBlink();
         }
+    }
+
+    combineFeatures(featuresList) {
+        if (!featuresList || featuresList.length === 0) {
+            return null;
+        }
+        
+        const keys = [
+            'faceX', 'faceY', 'faceSize',
+            'headYaw', 'headPitch', 'headRoll',
+            'leftEyeOpen', 'rightEyeOpen',
+            'gazeX', 'gazeY',
+            'mouthOpen', 'mouthWidth',
+            'leftBrowRaise', 'rightBrowRaise', 'browFurrow'
+        ];
+        
+        const combined = {};
+        let totalWeight = 0;
+        const faces = [];
+        
+        featuresList.forEach((feat) => {
+            const weight = Math.max(0.05, feat.faceSize || 0.3);
+            totalWeight += weight;
+            keys.forEach((key) => {
+                combined[key] = (combined[key] || 0) + (feat[key] || 0) * weight;
+            });
+            faces.push({
+                faceX: feat.faceX,
+                faceY: feat.faceY,
+                faceSize: feat.faceSize
+            });
+        });
+        
+        if (totalWeight <= 0) {
+            return featuresList[0];
+        }
+        
+        keys.forEach((key) => {
+            combined[key] /= totalWeight;
+        });
+        
+        combined.faces = faces;
+        return combined;
     }
     
     extractAllFeatures(landmarks) {
@@ -713,6 +768,8 @@ class FaceTracker {
         if (!this.faceData) {
             return {
                 detected: false,
+                faceCount: 0,
+                faces: [],
                 faceX: this.smoothers.faceX.getValue(),
                 faceY: this.smoothers.faceY.getValue(),
                 faceSize: this.smoothers.faceSize.getValue(),

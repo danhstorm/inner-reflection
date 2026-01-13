@@ -123,7 +123,7 @@
     
     <!-- Debug panel (hidden by default, toggle with 'D' key) -->
     <div id="debug-panel" class="debug-panel" style="display: none;">
-        <div class="debug-header">
+        <div class="debug-header" id="debug-header-bar" style="cursor: pointer;">
             <h3>Controls</h3>
             <div class="debug-header-buttons">
                 <button id="sound-toggle" class="sound-toggle" title="Toggle Sound">
@@ -190,10 +190,38 @@
                 </div>
             </div>
             <div class="debug-column" data-column-id="color">
-                <div class="debug-column-title">Color Base</div>
+                <div class="debug-column-title">Palette</div>
                 <div class="debug-column-body">
                 <div class="debug-section">
-                    <h4>Base Palette</h4>
+                    <h4>Wingle Words</h4>
+                    <div class="preset-buttons">
+                        <button class="preset-btn" data-preset="calm">Calm</button>
+                        <button class="preset-btn" data-preset="softBlobs">Soft Blobs</button>
+                        <button class="preset-btn" data-preset="singleRing">Single Ring</button>
+                        <button class="preset-btn" data-preset="multiRings">Multi Rings</button>
+                        <button class="preset-btn" data-preset="chromatic">Chromatic</button>
+                        <button class="preset-btn" data-preset="angular">Angular</button>
+                        <button class="preset-btn" data-preset="minimal">Minimal</button>
+                        <button class="preset-btn" data-preset="halo">Halo</button>
+                        <button class="preset-btn" data-preset="liquid">Liquid</button>
+                        <button class="preset-btn" data-preset="prism">Prism</button>
+                        <button class="preset-btn" data-preset="nocturne">Nocturne</button>
+                        <button class="preset-btn" data-preset="interference">Interference</button>
+                    </div>
+                </div>
+                <div class="debug-section">
+                    <h4>Sound Moods</h4>
+                    <div class="preset-buttons">
+                        <button class="sound-preset-btn" data-sound-preset="deep">Deep</button>
+                        <button class="sound-preset-btn" data-sound-preset="ethereal">Ethereal</button>
+                        <button class="sound-preset-btn" data-sound-preset="warm">Warm</button>
+                        <button class="sound-preset-btn" data-sound-preset="crystal">Crystal</button>
+                        <button class="sound-preset-btn" data-sound-preset="dark">Dark</button>
+                        <button class="sound-preset-btn" data-sound-preset="breath">Breath</button>
+                    </div>
+                </div>
+                <div class="debug-section">
+                    <h4>Base Colors</h4>
                     <div class="slider-group">
                         <label>Hue 1: <span id="val-hue1">0.5</span></label>
                         <input type="range" id="ctrl-hue1" min="0" max="1" step="0.01" value="0.5">
@@ -224,23 +252,6 @@
             <div class="debug-column" data-column-id="interactive">
                 <div class="debug-column-title">Interactive</div>
                 <div class="debug-column-body">
-                <div class="debug-section">
-                    <h4>Presets</h4>
-                    <div class="preset-buttons">
-                        <button class="preset-btn" data-preset="calm">Calm</button>
-                        <button class="preset-btn" data-preset="softBlobs">Soft Blobs</button>
-                        <button class="preset-btn" data-preset="singleRing">Single Ring</button>
-                        <button class="preset-btn" data-preset="multiRings">Multi Rings</button>
-                        <button class="preset-btn" data-preset="chromatic">Chromatic</button>
-                        <button class="preset-btn" data-preset="angular">Angular</button>
-                        <button class="preset-btn" data-preset="minimal">Minimal</button>
-                        <button class="preset-btn" data-preset="halo">Halo</button>
-                        <button class="preset-btn" data-preset="liquid">Liquid</button>
-                        <button class="preset-btn" data-preset="prism">Prism</button>
-                        <button class="preset-btn" data-preset="nocturne">Nocturne</button>
-                        <button class="preset-btn" data-preset="interference">Interference</button>
-                    </div>
-                </div>
                 <div class="debug-section">
                     <h4>Displacement</h4>
                     <div class="slider-group">

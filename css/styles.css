@@ -689,15 +689,27 @@ body.interacting {
 
 .range-dual-inputs {
     position: relative;
-    height: 12px;
+    height: 24px;
 }
 
 .range-dual-inputs input[type="range"] {
     position: absolute;
-    inset: 0;
+    left: 0;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
     margin: 0;
     padding: 0;
     height: 4px;
+    pointer-events: none;
+}
+
+.range-dual-inputs input[type="range"]::-webkit-slider-thumb {
+    pointer-events: auto;
+}
+
+.range-dual-inputs input[type="range"]::-moz-range-thumb {
+    pointer-events: auto;
 }
 
 .range-dual-inputs .range-min {
@@ -873,7 +885,8 @@ body.interacting {
     gap: 6px;
 }
 
-.preset-btn {
+.preset-btn,
+.sound-preset-btn {
     padding: 6px 12px;
     font-size: 10px;
     letter-spacing: 0.05em;
@@ -885,14 +898,25 @@ body.interacting {
     transition: all 0.2s;
 }
 
-.preset-btn:hover {
+.preset-btn:hover,
+.sound-preset-btn:hover {
     background: rgba(255, 255, 255, 0.15);
     color: white;
 }
 
-.preset-btn.active {
+.preset-btn.active,
+.sound-preset-btn.active {
     background: rgba(255, 255, 255, 0.2);
     color: white;
+}
+
+/* Sound preset buttons have slightly different accent */
+.sound-preset-btn {
+    border-left: 2px solid rgba(100, 200, 255, 0.3);
+}
+
+.sound-preset-btn.active {
+    border-left-color: rgba(100, 200, 255, 0.8);
 }
 
 .debug-info {

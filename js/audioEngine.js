@@ -165,27 +165,34 @@ class AudioEngine {
     }
     
     createMasterChain() {
-        // Master limiter to prevent clipping
-        this.limiter = new Tone.Limiter(-2).toDestination();
+        // Final brick wall limiter - catches any peaks that got through
+        this.limiter = new Tone.Limiter(-1).toDestination();
         
-        // Master compressor for consistent output
+        // Soft limiter before the brick wall to avoid harsh limiting artifacts
+        this.softLimiter = new Tone.Limiter(-3).connect(this.limiter);
+        
+        // Master compressor - more aggressive to prevent clipping
         this.compressor = new Tone.Compressor({
-            threshold: -24,
-            ratio: 8,
-            attack: 0.02,
-            release: 0.2
-        }).connect(this.limiter);
+            threshold: -18,
+            ratio: 12,
+            attack: 0.003,  // Faster attack to catch transients
+            release: 0.15,
+            knee: 6
+        }).connect(this.softLimiter);
         
-        // Master gain - keep headroom for limiter
-        this.masterGain = new Tone.Gain(Tone.dbToGain(CONFIG.audio.masterVolume + 2))
-            .connect(this.compressor);
+        // Pre-compressor gain reduction to give more headroom
+        this.preCompGain = new Tone.Gain(0.7).connect(this.compressor);
+        
+        // Master gain - reduced to prevent clipping
+        this.masterGain = new Tone.Gain(Tone.dbToGain(CONFIG.audio.masterVolume - 3))
+            .connect(this.preCompGain);
         this.unmutedGain = this.masterGain.gain.value;
         
-        // Master filter for overall tonal control
+        // Master filter for overall tonal control - reduce Q to avoid resonant peaks
         this.masterFilter = new Tone.Filter({
             type: 'lowpass',
             frequency: 8000,
-            Q: 0.5
+            Q: 0.3  // Lower Q to avoid resonant buildup
         }).connect(this.masterGain);
 
         if (this.isMuted) {
@@ -1462,6 +1469,180 @@ class AudioEngine {
         // Also affect shimmer pad
         if (this.ambientLayers?.shimmerPad) {
             this.ambientLayers.shimmerPad.set({ detune: clamped * 0.8 });
+        }
+    }
+    
+    // Per-hand sound control - pitch (cents) and shape (0-1 filter/character)
+    applyHandSoundControl(soundName, pitchCents, shapeAmount) {
+        if (!this.isPlaying) return;
+        
+        const clamped = Utils.clamp(pitchCents, -1200, 1200);  // ±1 octave range
+        const shape = Utils.clamp(shapeAmount, 0, 1);
+        
+        // Different sounds have different controllable parameters
+        switch (soundName) {
+            case 'base':
+                // Base drone - pitch + filter cutoff
+                if (this.drones.base?.synth) {
+                    this.drones.base.synth.set({ detune: clamped });
+                }
+                if (this.drones.base?.filter) {
+                    const baseFreq = 200;
+                    const freq = baseFreq * Math.pow(4, shape);  // 200Hz - 800Hz
+                    this.drones.base.filter.frequency.rampTo(freq, 0.1);
+                }
+                break;
+                
+            case 'mid':
+                // Mid drone - pitch + filter resonance
+                if (this.drones.mid?.synth) {
+                    this.drones.mid.synth.set({ detune: clamped });
+                }
+                if (this.drones.mid?.filter) {
+                    const freq = 400 + shape * 1600;  // 400Hz - 2000Hz
+                    this.drones.mid.filter.frequency.rampTo(freq, 0.1);
+                    this.drones.mid.filter.Q.rampTo(1 + shape * 8, 0.1);  // More resonance at right
+                }
+                break;
+                
+            case 'high':
+                // High drone - pitch + delay feedback
+                if (this.drones.high?.synth) {
+                    this.drones.high.synth.set({ detune: clamped });
+                }
+                if (this.effects.delay) {
+                    this.effects.delay.feedback.rampTo(0.2 + shape * 0.5, 0.1);  // 0.2 - 0.7
+                }
+                break;
+                
+            case 'shimmer':
+                // Shimmer pad - pitch + reverb wet
+                if (this.ambientLayers?.shimmerPad) {
+                    this.ambientLayers.shimmerPad.set({ detune: clamped });
+                }
+                if (this.effects.reverb) {
+                    this.effects.reverb.wet.rampTo(0.3 + shape * 0.5, 0.1);  // 0.3 - 0.8
+                }
+                // Also affect chorus for more movement
+                if (this.effects.chorus) {
+                    this.effects.chorus.depth.rampTo(shape * 0.8, 0.1);
+                }
+                break;
+        }
+    }
+    
+    // Reset a sound to its default state after hand releases
+    resetHandSoundControl(soundName) {
+        if (!this.isPlaying) return;
+        
+        const rampTime = 0.8;  // Smooth return to default - slightly longer for pitch
+        
+        switch (soundName) {
+            case 'base':
+                if (this.drones.base?.synth) {
+                    // Smooth ramp detune back to 0 to avoid dissonance
+                    try {
+                        const currentDetune = this.drones.base.synth.get().detune || 0;
+                        this.drones.base.synth.set({ detune: currentDetune });
+                        // Gradually ramp to 0
+                        const startTime = Tone.now();
+                        const rampDetune = () => {
+                            const elapsed = Tone.now() - startTime;
+                            const progress = Math.min(1, elapsed / rampTime);
+                            const newDetune = currentDetune * (1 - progress);
+                            if (this.drones.base?.synth) {
+                                this.drones.base.synth.set({ detune: Math.abs(newDetune) < 1 ? 0 : newDetune });
+                            }
+                            if (progress < 1) requestAnimationFrame(rampDetune);
+                        };
+                        requestAnimationFrame(rampDetune);
+                    } catch (e) {
+                        this.drones.base.synth.set({ detune: 0 });
+                    }
+                }
+                if (this.drones.base?.filter) {
+                    this.drones.base.filter.frequency.rampTo(200, rampTime);
+                }
+                break;
+                
+            case 'mid':
+                if (this.drones.mid?.synth) {
+                    try {
+                        const currentDetune = this.drones.mid.synth.get().detune || 0;
+                        this.drones.mid.synth.set({ detune: currentDetune });
+                        const startTime = Tone.now();
+                        const rampDetune = () => {
+                            const elapsed = Tone.now() - startTime;
+                            const progress = Math.min(1, elapsed / rampTime);
+                            const newDetune = currentDetune * (1 - progress);
+                            if (this.drones.mid?.synth) {
+                                this.drones.mid.synth.set({ detune: Math.abs(newDetune) < 1 ? 0 : newDetune });
+                            }
+                            if (progress < 1) requestAnimationFrame(rampDetune);
+                        };
+                        requestAnimationFrame(rampDetune);
+                    } catch (e) {
+                        this.drones.mid.synth.set({ detune: 0 });
+                    }
+                }
+                if (this.drones.mid?.filter) {
+                    this.drones.mid.filter.frequency.rampTo(800, rampTime);
+                    this.drones.mid.filter.Q.rampTo(2, rampTime);
+                }
+                break;
+                
+            case 'high':
+                if (this.drones.high?.synth) {
+                    try {
+                        const currentDetune = this.drones.high.synth.get().detune || 0;
+                        this.drones.high.synth.set({ detune: currentDetune });
+                        const startTime = Tone.now();
+                        const rampDetune = () => {
+                            const elapsed = Tone.now() - startTime;
+                            const progress = Math.min(1, elapsed / rampTime);
+                            const newDetune = currentDetune * (1 - progress);
+                            if (this.drones.high?.synth) {
+                                this.drones.high.synth.set({ detune: Math.abs(newDetune) < 1 ? 0 : newDetune });
+                            }
+                            if (progress < 1) requestAnimationFrame(rampDetune);
+                        };
+                        requestAnimationFrame(rampDetune);
+                    } catch (e) {
+                        this.drones.high.synth.set({ detune: 0 });
+                    }
+                }
+                if (this.effects.delay) {
+                    this.effects.delay.feedback.rampTo(0.4, rampTime);
+                }
+                break;
+                
+            case 'shimmer':
+                if (this.ambientLayers?.shimmerPad) {
+                    try {
+                        const currentDetune = this.ambientLayers.shimmerPad.get().detune || 0;
+                        this.ambientLayers.shimmerPad.set({ detune: currentDetune });
+                        const startTime = Tone.now();
+                        const rampDetune = () => {
+                            const elapsed = Tone.now() - startTime;
+                            const progress = Math.min(1, elapsed / rampTime);
+                            const newDetune = currentDetune * (1 - progress);
+                            if (this.ambientLayers?.shimmerPad) {
+                                this.ambientLayers.shimmerPad.set({ detune: Math.abs(newDetune) < 1 ? 0 : newDetune });
+                            }
+                            if (progress < 1) requestAnimationFrame(rampDetune);
+                        };
+                        requestAnimationFrame(rampDetune);
+                    } catch (e) {
+                        this.ambientLayers.shimmerPad.set({ detune: 0 });
+                    }
+                }
+                if (this.effects.reverb) {
+                    this.effects.reverb.wet.rampTo(0.5, rampTime);
+                }
+                if (this.effects.chorus) {
+                    this.effects.chorus.depth.rampTo(0.3, rampTime);
+                }
+                break;
         }
     }
     

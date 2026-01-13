@@ -32,6 +32,8 @@ class HandTracker {
             palmFacing: Array.from({ length: this.maxHands }, () => false),
             fists: Array.from({ length: this.maxHands }, () => 0),
             fingerCounts: Array.from({ length: this.maxHands }, () => 0),
+            allFingersExtended: Array.from({ length: this.maxHands }, () => false),  // All 5 fingers spread
+            thumbExtended: Array.from({ length: this.maxHands }, () => false),  // Thumb is extended
             thumbsUp: Array.from({ length: this.maxHands }, () => false),
             thumbsDown: Array.from({ length: this.maxHands }, () => false),
             influence: 0,
@@ -129,6 +131,8 @@ class HandTracker {
                 this.handState.palmFacing[i] = false;
                 this.handState.fists[i] = 0;
                 this.handState.fingerCounts[i] = 0;
+                this.handState.allFingersExtended[i] = false;
+                this.handState.thumbExtended[i] = false;
                 this.handState.thumbsUp[i] = false;
                 this.handState.thumbsDown[i] = false;
                 dyn.hold = Math.max(0, dyn.hold - delta * 2);
@@ -165,6 +169,8 @@ class HandTracker {
             // Finger is extended if tip is far from palm base
             const fingerInfo = this.countExtendedFingers(hand, palmCenter, palmSpan);
             this.handState.fingerCounts[i] = fingerInfo.count;
+            this.handState.allFingersExtended[i] = fingerInfo.allFingersExtended;
+            this.handState.thumbExtended[i] = fingerInfo.thumbExtended;
             this.handState.thumbsUp[i] = fingerInfo.thumbsUp;
             this.handState.thumbsDown[i] = fingerInfo.thumbsDown;
             
@@ -196,21 +202,29 @@ class HandTracker {
             const speed = Math.min(1.5, Math.hypot(dyn.velocity.x, dyn.velocity.y));
             const steadiness = Utils.clamp(1 - speed * 0.8, 0, 1);
             
-            if (palmFacing) {
-                // Slower buildup for softer grip
-                dyn.hold = Math.min(2.5, dyn.hold + delta * 0.8);
+            // Palm grab requires ALL fingers extended (open palm) for 1 second before activating
+            const allExtended = fingerInfo.allFingersExtended;
+            if (allExtended && palmFacing) {
+                // Only build up hold time if ALL fingers are extended
+                dyn.hold = Math.min(2.5, dyn.hold + delta * 1.0);
             } else {
-                dyn.hold = Math.max(0, dyn.hold - delta * 0.4);
+                // Reset hold time quickly if not all fingers extended
+                dyn.hold = Math.max(0, dyn.hold - delta * 2.0);
             }
             
-            // For grip strength - much softer calculation for slimy physics
-            const openness = 1 - fist;
-            // Reduced multipliers and cap for softer effect
-            const grabTarget = palmFacing ? Utils.clamp(dyn.hold / 2.5, 0, 0.7) * (0.3 + steadiness * 0.4) * (0.4 + openness * 0.4) : 0;
-            dyn.grab += (grabTarget - dyn.grab) * 0.06;  // Slower smoothing
+            // For grip strength - require 1 second hold time before any effect
+            const holdTimeRequired = 1.0;  // 1 second hold required
+            const holdProgress = Utils.clamp((dyn.hold - holdTimeRequired) / 1.0, 0, 1);  // 0 until 1s, then ramp up
             
-            // Softer strength calculation - less reactive to speed
-            const strength = Utils.clamp(dyn.grab * (0.5 + speed * 0.8), 0, 0.7);  // Capped at 0.7
+            // Only apply grab effect if hold threshold met AND all fingers still extended
+            const openness = 1 - fist;
+            const grabTarget = (allExtended && palmFacing && holdProgress > 0) 
+                ? holdProgress * (0.3 + steadiness * 0.4) * (0.4 + openness * 0.4) * 0.7
+                : 0;
+            dyn.grab += (grabTarget - dyn.grab) * 0.08;
+            
+            // Softer strength calculation
+            const strength = Utils.clamp(dyn.grab * (0.5 + speed * 0.8), 0, 0.7);
             strengths[i] = strength;
             strengthSum += strength;
             
@@ -290,8 +304,13 @@ class HandTracker {
         const isThumbsUp = thumbExtended && othersCurled && thumbUp && thumbVertical;
         const isThumbsDown = thumbExtended && othersCurled && thumbDown && thumbVertical;
         
+        // All 5 fingers extended = open palm (all 4 fingers + thumb)
+        const allFingersExtended = extendedCount === 4 && thumbExtended;
+        
         return {
             count: extendedCount,
+            thumbExtended: thumbExtended,
+            allFingersExtended: allFingersExtended,
             thumbsUp: isThumbsUp,
             thumbsDown: isThumbsDown
         };

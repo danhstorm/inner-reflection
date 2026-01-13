@@ -545,8 +545,9 @@ class VisualEngine {
         // Face spin direction: head tilt (roll) affects rotation direction
         const faceSpinInfluence = (state.faceSpinDirection ?? 0) * 0.15;
         
-        // Face darkness: closed eyes reduce brightness
-        const faceDarkness = state.faceDarkness ?? 0;
+        // Face darkness: disabled - was causing confusing darkening effect
+        // const faceDarkness = state.faceDarkness ?? 0;
+        const faceDarkness = 0;  // Disabled
         
         // Face motion speed: more movement = faster animation
         const faceMotionSpeed = state.faceMotionSpeed ?? 1.0;

@@ -689,11 +689,64 @@ const Shaders = {
         }
         
         // ===========================================
-        // 3D SLICE SHAPE FUNCTIONS
-        // Simulates slicing through 3D objects at various angles
+        // GLASS PLATE EFFECT
+        // Creates stacked round glass plates with edge refraction
+        // Stronger refraction at the edges of each plate
         // ===========================================
         
-        // Shape 0: Soft concentric gradients (smooth lens-like distortion)
+        // Calculate glass plate refraction - stronger at edges
+        // Returns refraction strength based on distance from plate edge
+        float glassPlateRefraction(float distFromCenter, float plateRadius, float edgeWidth) {
+            // Distance from the edge of this plate
+            float distFromEdge = abs(distFromCenter - plateRadius);
+            
+            // Refraction is strongest right at the edge, fades inward
+            // Use smooth falloff from edge
+            float edgeRefraction = 1.0 - smoothstep(0.0, edgeWidth, distFromEdge);
+            
+            // Add slight refraction across the whole plate (glass has some effect throughout)
+            float plateInterior = smoothstep(plateRadius + edgeWidth, plateRadius - edgeWidth * 0.5, distFromCenter);
+            float interiorRefraction = plateInterior * 0.15;
+            
+            return edgeRefraction + interiorRefraction;
+        }
+        
+        // Calculate cumulative refraction from stacked glass plates
+        float stackedGlassPlates(float dist, float maxRadius, float numPlates, float phase, float delay, float edgeSharpness) {
+            float totalRefraction = 0.0;
+            float plateSpacing = maxRadius / max(numPlates, 1.0);
+            
+            // Edge width controls how thick the refraction band is at each plate edge
+            float edgeWidth = plateSpacing * mix(0.15, 0.45, 1.0 - edgeSharpness);
+            
+            for (float i = 1.0; i <= 16.0; i += 1.0) {
+                if (i > numPlates) break;
+                
+                // Each plate has a slightly different radius (incremental sizes)
+                float plateIndex = i;
+                float waveOffset = getRingWaveOffset(plateIndex, numPlates, phase, delay, uWaveAmplitude);
+                float plateRadius = plateSpacing * i + waveOffset * 0.3;
+                
+                // Calculate refraction contribution from this plate
+                float refraction = glassPlateRefraction(dist, plateRadius, edgeWidth);
+                
+                // Plates further out have slightly less effect (depth attenuation)
+                float depthFade = 1.0 - (i / numPlates) * 0.3;
+                
+                totalRefraction += refraction * depthFade;
+            }
+            
+            // Normalize and add some variation
+            return totalRefraction * 0.7;
+        }
+        
+        // ===========================================
+        // 3D SLICE SHAPE FUNCTIONS
+        // Simulates slicing through 3D objects at various angles
+        // Now using stacked glass plate effect
+        // ===========================================
+        
+        // Shape 0: Circular glass plates - stacked round discs with edge refraction
         float shapeCircleSlice(vec2 uv, vec2 center, float rings, float phase, float delay) {
             vec2 toCenter = uv - center;
             float dist = length(toCenter);
@@ -702,76 +755,67 @@ const Shaders = {
             float normalizedDist = dist / uMaxRadius;
             if (normalizedDist < uMinRadius) return 0.0;
             
-            // Soft wave-based gradient - not sharp rings
-            float ringIndex = floor(normalizedDist * rings * 0.5);
-            float waveOffset = getRingWaveOffset(ringIndex, rings, phase, delay, uWaveAmplitude * 1.5);
+            // Use stacked glass plates effect
+            float glassEffect = stackedGlassPlates(dist, uMaxRadius, rings, phase, delay, uEdgeSharpness);
             
-            // Smooth sinusoidal waves instead of fract for sharp rings
-            float waveValue = sin((dist + waveOffset) / uMaxRadius * rings * PI) * 0.5 + 0.5;
+            // Add subtle organic wobble
+            float angle = atan(toCenter.y, toCenter.x);
+            float wobble = sin(angle * 3.0 + phase * 0.15) * uWobble * 0.5;
             
-            // Sharper edges - reduced minimum softness
-            float edge = uEdgeSharpness * 1.5 + 0.25;
-            float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
-            
-            // Strong contrast gradient
-            return softness * 1.5;
+            return glassEffect * (1.0 + wobble) * 1.3;
         }
         
-        // Shape 1: Torus slice - soft elliptical gradients
+        // Shape 1: Torus slice - elliptical glass plates with tilt
         float shapeTorusSlice(vec2 uv, vec2 center, float rings, float phase, float delay) {
             vec2 toCenter = uv - center;
             
-            // Slice angle slowly evolves
+            // Slice angle slowly evolves - creates elliptical plates
             float sliceAngle = phase * 0.1;
-            
-            // Transform to 3D slice through torus
             float tilt = sin(sliceAngle) * 0.6;
-            vec3 p = vec3(toCenter.x, toCenter.y * (1.0 + tilt * 0.5), tilt * 0.3);
             
-            // Torus parameters
-            float majorRadius = uMaxRadius * 0.6;
-            float minorRadius = uMaxRadius * 0.25;
+            // Apply elliptical distortion (tilted view of circular plates)
+            vec2 stretched = toCenter;
+            stretched.y *= (1.0 + tilt * 0.5);
+            float dist = length(stretched);
             
-            // Distance to torus surface
-            float torusDist = sdTorus(p, vec2(majorRadius, minorRadius));
+            // Use stacked glass plates with the stretched distance
+            float glassEffect = stackedGlassPlates(dist, uMaxRadius * 0.85, rings, phase, delay, uEdgeSharpness);
             
-            // Smooth sinusoidal gradient instead of sharp rings
-            float waveOffset = getRingWaveOffset(0.0, rings, phase, delay, uWaveAmplitude);
-            float waveValue = sin((abs(torusDist) + waveOffset) * rings * 1.5 + phase * 0.05) * 0.5 + 0.5;
+            // Add depth-based intensity variation
+            float depthMod = 1.0 + tilt * 0.2;
             
-            // Sharper edges
-            float edge = uEdgeSharpness * 1.5 + 0.25;
-            float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
-            
-            return softness * 1.4;
+            return glassEffect * depthMod * 1.3;
         }
         
-        // Shape 2: Linear bands - soft flowing gradients across screen
+        // Shape 2: Linear glass bands - parallel glass plates
         float shapeLinearBands(vec2 uv, vec2 center, float rings, float phase, float delay) {
             vec2 toCenter = uv - center;
             
             // Line angle evolves over time
             float lineAngle = phase * 0.08 + uRotation;
-            
-            // Project onto line direction
             vec2 lineDir = vec2(cos(lineAngle), sin(lineAngle));
-            float lineDist = dot(toCenter, lineDir);
             
-            // Offset from center for asymmetric feel
-            lineDist += sin(phase * 0.15) * 0.2;
+            // Project position onto line direction (distance from center line)
+            float lineDist = abs(dot(toCenter, lineDir)) + 0.5;
             
-            // Soft wave gradient instead of sharp bands
-            float waveOffset = getRingWaveOffset(0.0, rings, phase, delay, uWaveAmplitude * 1.2);
-            float waveValue = sin((lineDist + waveOffset) * rings * 0.8 * PI) * 0.5 + 0.5;
+            // Use glass plate effect along this axis
+            float plateSpacing = uMaxRadius / max(rings, 1.0);
+            float totalRefraction = 0.0;
+            float edgeWidth = plateSpacing * mix(0.2, 0.5, 1.0 - uEdgeSharpness);
             
-            // Sharper edges for clearer bands
-            float edge = uEdgeSharpness * 1.5 + 0.3;
-            float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
+            for (float i = 1.0; i <= 16.0; i += 1.0) {
+                if (i > rings) break;
+                float waveOffset = getRingWaveOffset(i, rings, phase, delay, uWaveAmplitude);
+                float platePos = plateSpacing * i + waveOffset * 0.2;
+                float distFromEdge = abs(lineDist - platePos);
+                float edgeRefraction = 1.0 - smoothstep(0.0, edgeWidth, distFromEdge);
+                totalRefraction += edgeRefraction * (1.0 - i / rings * 0.3);
+            }
             
-            return softness * 1.5;
+            return totalRefraction * 0.8;
         }
         
-        // Shape 3: Skewed lines - diagonal bands with perspective
+        // Shape 3: Skewed glass plates - diagonal with perspective
         float shapeSkewedLines(vec2 uv, vec2 center, float rings, float phase, float delay) {
             vec2 toCenter = uv - center;
             
@@ -779,41 +823,27 @@ const Shaders = {
             float skewAngle = phase * 0.06 + PI * 0.25;
             float skewAmount = sin(phase * 0.12) * 0.4 + 0.3;
             
-            // Apply perspective skew
+            // Apply perspective skew to simulate tilted glass plates
             vec2 skewed = toCenter;
             skewed.x += skewed.y * skewAmount;
+            float dist = length(skewed);
             
-            // Line direction with skew
-            vec2 lineDir = vec2(cos(skewAngle), sin(skewAngle));
-            float lineDist = dot(skewed, lineDir);
+            // Use glass plates with skewed distance
+            float glassEffect = stackedGlassPlates(dist, uMaxRadius, rings * 0.8, phase, delay, uEdgeSharpness);
             
-            // Create bands with varying width
-            float widthMod = 1.0 + sin(lineDist * 3.0 + phase * 0.2) * 0.2;
-            float bandIndex = floor((lineDist + 1.5) * rings * 0.4 * widthMod);
-            float waveOffset = getRingWaveOffset(abs(bandIndex), rings, phase, delay, uWaveAmplitude * 1.2);
-            
-            // Soft sinusoidal gradient
-            float waveValue = sin((lineDist + waveOffset) * rings * 0.6 * widthMod * PI) * 0.5 + 0.5;
-            
-            // Very soft edge
-            float edge = uEdgeSharpness * 2.0 + 0.4;
-            float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
-            
-            return softness * 1.3;
+            return glassEffect * 1.2;
         }
         
-        // Shape 4: Cylinder slice - ovals that become lines at extreme angles
+        // Shape 4: Cylinder slice - stretched elliptical glass plates
         float shapeCylinderSlice(vec2 uv, vec2 center, float rings, float phase, float delay) {
             vec2 toCenter = uv - center;
             
-            // Slice angle through cylinder
+            // Slice angle through cylinder - creates elliptical stretch
             float sliceAngle = sin(phase * 0.08) * 0.7;
-            
-            // Transform: as angle increases, circles become ellipses then lines
             float stretch = 1.0 / (cos(sliceAngle) + 0.1);
-            stretch = min(stretch, 5.0); // Cap the stretch
+            stretch = min(stretch, 4.0);
             
-            // Apply anisotropic scaling
+            // Apply anisotropic scaling (tilted cylinder view)
             float stretchAngle = phase * 0.05;
             mat2 stretchMat = mat2(
                 cos(stretchAngle), -sin(stretchAngle),
@@ -825,121 +855,82 @@ const Shaders = {
             
             float dist = length(stretched);
             
-            // Ring calculation
-            float normalizedDist = dist / uMaxRadius;
-            if (normalizedDist < uMinRadius * stretch) return 0.0;
+            // Use glass plates with stretched distance
+            float glassEffect = stackedGlassPlates(dist, uMaxRadius * stretch * 0.5, rings, phase, delay, uEdgeSharpness);
             
-            float ringIndex = floor(normalizedDist * rings);
-            float waveOffset = getRingWaveOffset(ringIndex, rings, phase, delay, uWaveAmplitude * 1.3);
-            
-            // Soft wave gradient
-            float waveValue = sin((dist + waveOffset) / uMaxRadius * rings * PI * 0.8) * 0.5 + 0.5;
-            
-            // Soft edges
-            float edge = uEdgeSharpness * 2.0 + 0.35;
-            float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
-            
-            return softness * (1.0 + stretch * 0.1);
+            return glassEffect * 1.2;
         }
         
-        // Shape 5: Sphere with rotating slice plane - creates moving oval
+        // Shape 5: Sphere slice - rotating view of spherical glass shells
         float shapeSphereSlice(vec2 uv, vec2 center, float rings, float phase, float delay) {
             vec2 toCenter = uv - center;
             
-            // 3D position on slice plane
+            // 3D rotation for different viewing angles
             vec3 p = vec3(toCenter, 0.0);
-            
-            // Rotate slice plane in 3D
             float rotX = sin(phase * 0.07) * 0.5;
             float rotY = cos(phase * 0.09) * 0.4;
-            
             p = rotateX(rotX) * p;
             p = rotateY(rotY) * p;
             
-            // Distance to nested spheres
-            float sphereScale = uMaxRadius * 0.8;
-            float dist = length(p) / sphereScale;
+            // Distance in rotated space
+            float dist = length(p.xy);
             
-            // Create concentric shells with soft gradient
-            float ringIndex = floor(dist * rings);
-            float waveOffset = getRingWaveOffset(ringIndex, rings, phase, delay, uWaveAmplitude * 1.2);
+            // Use glass plates (spherical shells viewed from angle)
+            float glassEffect = stackedGlassPlates(dist, uMaxRadius * 0.8, rings, phase, delay, uEdgeSharpness);
             
-            // Soft wave instead of sharp rings
-            float waveValue = sin((dist + waveOffset * 0.5) * rings * PI) * 0.5 + 0.5;
+            // Depth-based intensity variation
+            float depthFade = 1.0 - abs(p.z) * 1.5;
+            depthFade = max(depthFade, 0.4);
             
-            // Sharper edges
-            float edge = uEdgeSharpness * 1.5 + 0.3;
-            float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
-            
-            // Add depth-based intensity
-            float depthFade = 1.0 - abs(p.z) * 2.0;
-            depthFade = max(depthFade, 0.3);
-            
-            return softness * 1.4 * depthFade;
+            return glassEffect * depthFade * 1.3;
         }
         
-        // Shape 6: Hyperboloid slice - creates hyperbolic curves
+        // Shape 6: Hyperboloid - warped glass plates
         float shapeHyperboloid(vec2 uv, vec2 center, float rings, float phase, float delay) {
             vec2 toCenter = uv - center;
             
-            // Hyperboloid parameter
+            // Hyperboloid parameter - creates warped elliptical plates
             float k = sin(phase * 0.1) * 0.3 + 0.5;
-            
-            // Hyperboloid distance: x² + y² - z² = k
             // On our 2D slice, this creates hyperbolic curves
+            // Warped distance creates elliptical glass plates
             float hyperDist = sqrt(abs(toCenter.x * toCenter.x * (1.0 + k) + 
                                        toCenter.y * toCenter.y * (1.0 - k)));
             
-            float normalizedDist = hyperDist / uMaxRadius;
-            float ringIndex = floor(normalizedDist * rings);
-            float waveOffset = getRingWaveOffset(ringIndex, rings, phase, delay, uWaveAmplitude * 1.2);
+            // Use glass plates with hyperboloid distance
+            float glassEffect = stackedGlassPlates(hyperDist, uMaxRadius, rings, phase, delay, uEdgeSharpness);
             
-            // Soft wave gradient
-            float waveValue = sin((hyperDist + waveOffset) / uMaxRadius * rings * PI * 0.9) * 0.5 + 0.5;
-            
-            // Soft edge
-            float edge = uEdgeSharpness * 2.0 + 0.35;
-            float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
-            
-            return softness * 1.3;
+            return glassEffect * 1.2;
         }
         
-        // Shape 7: Spiral ramp slice - like slicing through a parking garage
+        // Shape 7: Spiral glass plates - twisted arrangement
         float shapeSpiralRamp(vec2 uv, vec2 center, float rings, float phase, float delay) {
             vec2 toCenter = uv - center;
             float dist = length(toCenter);
             float angle = atan(toCenter.y, toCenter.x);
             
-            // Spiral: z = angle (unwrapped height)
-            // Slice at different z heights creates spiral pattern
-            float sliceHeight = sin(phase * 0.1) * 2.0;
-            float spiralZ = angle / TAU + dist * 1.5;
+            // Spiral offset - each plate is slightly rotated
+            float spiralTwist = angle / TAU * 0.3;
+            float adjustedDist = dist + spiralTwist * uMaxRadius * 0.2;
             
-            // Distance to slice plane
-            float spiralDist = abs(fract(spiralZ - sliceHeight * 0.5) - 0.5) * 2.0;
+            // Use glass plates with spiral-adjusted distance
+            float glassEffect = stackedGlassPlates(adjustedDist, uMaxRadius, rings, phase, delay, uEdgeSharpness);
             
-            float waveOffset = getRingWaveOffset(0.0, rings, phase, delay, uWaveAmplitude * 1.2);
+            // Add subtle angle-based variation
+            float angleMod = sin(angle * 3.0 + phase * 0.1) * 0.15;
             
-            // Soft sinusoidal wave
-            float waveValue = sin((spiralDist + waveOffset * 0.3) * rings * PI) * 0.5 + 0.5;
-            
-            // Soft edge
-            float edge = uEdgeSharpness * 2.0 + 0.35;
-            float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
-            
-            return softness * 1.2;
+            return glassEffect * (1.0 + angleMod) * 1.1;
         }
         
-        // Shape 8: Parallel planes - creates interference pattern
+        // Shape 8: Parallel glass planes - creates interference pattern
         float shapeParallelPlanes(vec2 uv, vec2 center, float rings, float phase, float delay) {
-            // Early exit if parallel lines are disabled
+            // Early exit if parallel planes are disabled
             if (uParallelStrength < 0.01 && uParallelPresence < 0.01) {
                 return 0.0;
             }
             
             vec2 toCenter = uv - center;
             
-            // Two sets of parallel lines at different angles
+            // Two sets of parallel glass planes at different angles
             float spin = mix(0.02, 0.12, uParallelSpin);
             float angle1 = phase * spin;
             float angle2 = phase * spin + PI * 0.5 + sin(phase * 0.08) * 0.3;
@@ -951,104 +942,76 @@ const Shaders = {
             vec2 dir1 = vec2(cos(angle1), sin(angle1));
             vec2 dir2 = vec2(cos(angle2), sin(angle2));
             
-            float dist1 = dot(scaled, dir1);
-            float dist2 = dot(scaled, dir2);
+            float dist1 = abs(dot(scaled, dir1));
+            float dist2 = abs(dot(scaled, dir2));
             
-            // Create bands from both directions
-            float bandScale = mix(0.22, 0.45, uParallelThickness);
-            float bandIndex1 = floor((dist1 + 1.0) * rings * bandScale);
-            float bandIndex2 = floor((dist2 + 1.0) * rings * bandScale);
-            float waveOffset1 = getRingWaveOffset(abs(bandIndex1), rings, phase, delay, uWaveAmplitude);
-            float waveOffset2 = getRingWaveOffset(abs(bandIndex2), rings, phase * 1.1, delay * 0.9, uWaveAmplitude);
+            // Glass plate effect for parallel planes
+            float plateSpacing = uMaxRadius / max(rings * 0.5, 1.0);
+            float edgeWidth = plateSpacing * mix(0.2, 0.5, 1.0 - uEdgeSharpness) * uParallelThickness;
             
-            float band1 = fract((dist1 + 1.0 + waveOffset1) * rings * bandScale);
-            float band2 = fract((dist2 + 1.0 + waveOffset2) * rings * bandScale);
+            float refraction1 = 0.0;
+            float refraction2 = 0.0;
             
-            // Soft sinusoidal waves
-            float wave1 = sin(band1 * PI * 2.0) * 0.5 + 0.5;
-            float wave2 = sin(band2 * PI * 2.0) * 0.5 + 0.5;
+            for (float i = 1.0; i <= 12.0; i += 1.0) {
+                if (i > rings * 0.6) break;
+                float waveOffset1 = getRingWaveOffset(i, rings, phase, delay, uWaveAmplitude);
+                float waveOffset2 = getRingWaveOffset(i, rings, phase * 1.1, delay * 0.9, uWaveAmplitude);
+                
+                float platePos1 = plateSpacing * i + waveOffset1 * 0.15;
+                float platePos2 = plateSpacing * i + waveOffset2 * 0.15;
+                
+                float edge1 = 1.0 - smoothstep(0.0, edgeWidth, abs(dist1 - platePos1));
+                float edge2 = 1.0 - smoothstep(0.0, edgeWidth, abs(dist2 - platePos2));
+                
+                refraction1 += edge1 * (1.0 - i / rings * 0.4);
+                refraction2 += edge2 * (1.0 - i / rings * 0.4);
+            }
             
-            // Soft edges
-            float edge = uEdgeSharpness * (1.2 + uParallelThickness) + mix(0.18, 0.45, uParallelThickness);
-            float soft1 = smoothstep(0.0, edge, wave1) * smoothstep(1.0, 1.0 - edge, wave1);
-            float soft2 = smoothstep(0.0, edge, wave2) * smoothstep(1.0, 1.0 - edge, wave2);
-            
-            // Combine with interference - reduced base multiplier
-            float combined = max(soft1, soft2) + soft1 * soft2 * 0.3;
+            // Combine with interference
+            float combined = max(refraction1, refraction2) + refraction1 * refraction2 * 0.4;
             float presence = smoothstep(0.2, 0.8, sin(phase * 0.05 + uParallelPresence * 2.0) * 0.5 + 0.5);
             float appear = mix(0.0, presence, uParallelPresence);
             
-            // Stronger scaling by strength - allows full turn off
-            return combined * 0.25 * uParallelStrength * uParallelStrength * appear;
+            // Scale by strength
+            return combined * 0.3 * uParallelStrength * uParallelStrength * appear;
         }
         
-        // Shape 9: Cone slice - conic sections (circles, ellipses, parabolas, hyperbolas)
+        // Shape 9: Conic glass plates - elliptical with varying eccentricity
         float shapeConicSection(vec2 uv, vec2 center, float rings, float phase, float delay) {
             vec2 toCenter = uv - center;
             
-            // Cone angle determines the conic section type
-            float coneAngle = sin(phase * 0.06) * 0.4 + 0.5; // 0=circle, 0.5=parabola, >0.5=hyperbola
+            // Eccentricity varies over time
+            float e = sin(phase * 0.06) * 0.4 + 0.5;
             
-            // Eccentricity based on slice angle
-            float e = coneAngle;
-            
-            // Conic section in polar form: r = l / (1 + e*cos(theta))
+            // Apply eccentricity to create elliptical distortion
             float angle = atan(toCenter.y, toCenter.x);
-            float targetR = uMaxRadius * 0.5 / (1.0 + e * cos(angle - phase * 0.1));
-            targetR = abs(targetR);
+            float distMod = 1.0 + e * cos(angle - phase * 0.1) * 0.3;
+            float dist = length(toCenter) * distMod;
             
-            float dist = length(toCenter);
-            float conicDist = abs(dist - targetR);
+            // Use glass plates with modified distance
+            float glassEffect = stackedGlassPlates(dist, uMaxRadius * 0.9, rings, phase, delay, uEdgeSharpness);
             
-            // Create rings around the conic
-            float normalizedDist = dist / uMaxRadius;
-            float ringIndex = floor(normalizedDist * rings);
-            float waveOffset = getRingWaveOffset(ringIndex, rings, phase, delay, uWaveAmplitude);
-            
-            // Blend between radial rings and conic distance
-            float blendedDist = mix(dist, dist + conicDist * 0.5, 0.3) + waveOffset;
-            
-            // Soft sinusoidal wave
-            float waveValue = sin(blendedDist / uMaxRadius * rings * PI * 0.9) * 0.5 + 0.5;
-            
-            // Soft edge
-            float edge = uEdgeSharpness * 2.0 + 0.35;
-            float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
-            
-            return softness * 1.3;
+            return glassEffect * 1.2;
         }
         
-        // Shape 10: Möbius-like twisted bands
+        // Shape 10: Twisted glass plates - Möbius-like arrangement
         float shapeMoebiusBands(vec2 uv, vec2 center, float rings, float phase, float delay) {
             vec2 toCenter = uv - center;
             float dist = length(toCenter);
             float angle = atan(toCenter.y, toCenter.x);
             
-            // Möbius twist: as you go around, the band twists
-            float twist = angle / TAU; // 0 to 1 around the circle
+            // Möbius twist: plates are offset based on angle
             float twistAmount = sin(phase * 0.08) * 0.5 + 0.5;
+            float twistedDist = dist + sin(angle * 2.0 + phase * 0.15) * uMaxRadius * 0.12 * twistAmount;
             
-            // Apply twist to radial distance
-            float twistedDist = dist + sin(angle * 2.0 + phase * 0.15) * uMaxRadius * 0.15 * twistAmount;
+            // Use glass plates with twisted distance
+            float phaseShift = angle * twistAmount * 0.5;
+            float glassEffect = stackedGlassPlates(twistedDist, uMaxRadius, rings, phase + phaseShift, delay, uEdgeSharpness);
             
-            // Phase shifts based on angle (creates the twist illusion)
-            float phaseShift = angle * twistAmount;
-            
-            float normalizedDist = twistedDist / uMaxRadius;
-            float ringIndex = floor(normalizedDist * rings);
-            float waveOffset = getRingWaveOffset(ringIndex, rings, phase + phaseShift, delay, uWaveAmplitude * 1.2);
-            
-            // Soft sinusoidal wave
-            float waveValue = sin((twistedDist + waveOffset) / uMaxRadius * rings * PI) * 0.5 + 0.5;
-            
-            // Soft edge
-            float edge = uEdgeSharpness * 2.0 + 0.35;
-            float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
-            
-            return softness * 1.3;
+            return glassEffect * 1.2;
         }
         
-        // Shape 11: Pill/Capsule - soft glowing rounded shape
+        // Shape 11: Pill/Capsule glass plates - elongated rounded shape
         float shapePillCapsule(vec2 uv, vec2 center, float rings, float phase, float delay) {
             vec2 toCenter = uv - center;
             
@@ -1057,28 +1020,25 @@ const Shaders = {
             mat2 rot = mat2(cos(pillAngle), -sin(pillAngle), sin(pillAngle), cos(pillAngle));
             vec2 rotated = rot * toCenter;
             
-            // Pill dimensions - elongated vertically, breathing
-            float pillHeight = uMaxRadius * (0.6 + sin(phase * 0.1) * 0.15);
+            // Pill dimensions
+            float pillHeight = uMaxRadius * (0.5 + sin(phase * 0.1) * 0.1);
             float pillRadius = uMaxRadius * 0.35;
             
-            // Distance to pill shape
+            // Distance to pill shape edge
             float pillDist = sdCapsule(rotated, pillHeight, pillRadius);
             
-            // Soft sinusoidal gradient based on distance
-            float waveOffset = getRingWaveOffset(0.0, rings, phase, delay, uWaveAmplitude * 1.2);
-            float waveValue = sin((abs(pillDist) + waveOffset) / uMaxRadius * rings * PI * 0.8) * 0.5 + 0.5;
+            // For points inside the pill, use distance from center
+            // For points outside, use distance from edge
+            float effectiveDist = pillDist > 0.0 ? pillDist + pillRadius : length(rotated) * 0.8;
             
-            // Very soft edges for smooth glow
-            float edge = uEdgeSharpness * 2.5 + 0.45;
-            float softness = smoothstep(0.0, edge, waveValue) * smoothstep(1.0, 1.0 - edge, waveValue);
+            // Use glass plates with pill-based distance
+            float glassEffect = stackedGlassPlates(effectiveDist, uMaxRadius * 0.8, rings * 0.7, phase, delay, uEdgeSharpness);
             
-            // Inside vs outside the pill - soft glow inside
-            float insidePill = smoothstep(0.05, -0.05, pillDist);
+            // Add soft glow inside the pill
+            float insidePill = smoothstep(0.02, -0.08, pillDist);
+            float interiorGlow = insidePill * 0.4;
             
-            // Blend: soft gradient inside and outside
-            float result = mix(softness, 0.7 + sin(phase * 0.15) * 0.15, insidePill * 0.5);
-            
-            return result * 1.4;
+            return glassEffect * 1.3 + interiorGlow;
         }
         
         // ===========================================
@@ -1276,15 +1236,25 @@ const Shaders = {
                 totalDisp = mix(totalDisp, morphDisp, uMorphProgress);
             }
             
+            // Glass plate overlay - additional edge refraction at plate boundaries
             if (uRingOverlayStrength > 0.001) {
-                vec2 ringVec = uvCorrected - center1Lagged;
-                float ringDist = length(ringVec) / max(uMaxRadius, 0.0001);
-                float ringPhase = ringDist * uRings;
-                float ringBand = abs(fract(ringPhase) - 0.5);
-                float width = mix(0.015, 0.14, uRingOverlayWidth);
-                float ringMask = smoothstep(width, 0.0, ringBand);
-                vec2 ringDir = normalize(ringVec + 0.0001);
-                totalDisp += ringDir * ringMask * uRingOverlayStrength * 0.08;
+                vec2 plateVec = uvCorrected - center1Lagged;
+                float plateDist = length(plateVec);
+                float plateSpacing = uMaxRadius / max(uRings * 0.5, 1.0);
+                float edgeWidth = plateSpacing * mix(0.1, 0.3, uRingOverlayWidth);
+                
+                // Accumulate refraction from multiple plate edges
+                float plateRefraction = 0.0;
+                for (float i = 1.0; i <= 10.0; i += 1.0) {
+                    if (i > uRings * 0.6) break;
+                    float plateRadius = plateSpacing * i;
+                    float distFromEdge = abs(plateDist - plateRadius);
+                    float edgeEffect = 1.0 - smoothstep(0.0, edgeWidth, distFromEdge);
+                    plateRefraction += edgeEffect * (1.0 - i / uRings * 0.5);
+                }
+                
+                vec2 plateDir = normalize(plateVec + 0.0001);
+                totalDisp += plateDir * plateRefraction * uRingOverlayStrength * 0.06;
             }
             
             // Convert back to UV space (undo aspect correction)

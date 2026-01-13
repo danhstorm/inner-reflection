@@ -164,6 +164,32 @@ class InnerReflectionApp {
             scale: [0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 17, 19, 21, 23, 24]
         };
         
+        // Per-hand fist control state - each hand can grab a different sound
+        this.handFistControls = [
+            { 
+                active: false, 
+                targetSound: null, 
+                holdStart: 0, 
+                initialY: 0.5, 
+                initialX: 0.5,
+                currentPitch: 0,
+                currentShape: 0.5,
+                soundIndex: 0  // Which sound this hand is controlling
+            },
+            { 
+                active: false, 
+                targetSound: null, 
+                holdStart: 0, 
+                initialY: 0.5, 
+                initialX: 0.5,
+                currentPitch: 0,
+                currentShape: 0.5,
+                soundIndex: 1  // Second hand gets a different sound
+            }
+        ];
+        // Available sounds to control: base, mid, high, shimmer
+        this.controlableSounds = ['base', 'mid', 'high', 'shimmer'];
+        
         // Face tracking smoothing - VERY heavy smoothing to prevent flickering
         this.faceSmoothing = {
             x: { value: 0.5, target: 0.5, velocity: 0 },
@@ -1597,14 +1623,6 @@ class InnerReflectionApp {
             });
         }
         
-        // Make header title ("Controls") clickable to close panel
-        const debugHeaderTitle = debugPanel?.querySelector('.debug-header h3');
-        if (debugHeaderTitle) {
-            debugHeaderTitle.addEventListener('click', () => {
-                debugPanel.style.display = 'none';
-            });
-        }
-        
         // Sound on/off toggle
         if (soundToggle) {
             soundToggle.addEventListener('click', () => {
@@ -1664,7 +1682,7 @@ class InnerReflectionApp {
             });
         }
         
-        // Setup preset buttons
+        // Setup preset buttons (visual presets / wingle words)
         document.querySelectorAll('.preset-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const preset = e.target.dataset.preset;
@@ -1675,6 +1693,29 @@ class InnerReflectionApp {
                 e.target.classList.add('active');
             });
         });
+        
+        // Setup sound preset buttons
+        document.querySelectorAll('.sound-preset-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const soundPreset = e.target.dataset.soundPreset;
+                this.applySoundPreset(soundPreset);
+                
+                // Update active state
+                document.querySelectorAll('.sound-preset-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+            });
+        });
+        
+        // Make entire header bar clickable to close panel
+        const debugHeaderBar = document.getElementById('debug-header-bar');
+        if (debugHeaderBar) {
+            debugHeaderBar.addEventListener('click', (e) => {
+                // Don't close if clicking on buttons inside the header
+                if (e.target.closest('.debug-header-buttons')) return;
+                this.visualEngine?.boostSmoothing(15);
+                debugPanel.style.display = 'none';
+            });
+        }
         
         // Setup sliders
         this.setupStateSlider('ctrl-hue1', 'val-hue1', 'colorHue1');
@@ -2218,94 +2259,148 @@ class InnerReflectionApp {
     applyHandAudio(handState, deltaTime) {
         if (!this.enabledInputs.sound || !this.audioEngine) return;
         
-        const now = performance.now();
-        let bestFist = 0;
-        let bestVelY = 0;
-        let fistHandIndex = -1;
-        let bestFingerCount = 0;
-        let anyThumbsUp = false;
-        let anyThumbsDown = false;
+        try {
+            const now = performance.now();
+            let bestFingerCount = 0;
+            let anyThumbsUp = false;
+            let anyThumbsDown = false;
+            
+            // Initialize gesture tracking state if not present
+            if (!this.gestureState) {
+                this.gestureState = {
+                    fingerMode: 0,
+                    fingerModeIntensity: 0,
+                    thumbsUpStart: 0,
+                    thumbsDownStart: 0,
+                    thumbsUpActive: false,
+                    thumbsDownActive: false,
+                    lastFingerCount: 0,
+                    fingerHoldStart: 0
+                };
+            }
+            
+            // Ensure handFistControls is initialized
+            if (!this.handFistControls || !Array.isArray(this.handFistControls)) {
+                this.handFistControls = [
+                    { active: false, targetSound: null, holdStart: 0, initialY: 0.5, initialX: 0.5, currentPitch: 0, currentShape: 0.5, soundIndex: 0 },
+                    { active: false, targetSound: null, holdStart: 0, initialY: 0.5, initialX: 0.5, currentPitch: 0, currentShape: 0.5, soundIndex: 1 }
+                ];
+            }
+            if (!this.controlableSounds) {
+                this.controlableSounds = ['base', 'mid', 'high', 'shimmer'];
+            }
+            
+            // =========================================
+            // PER-HAND FIST CONTROL (pitch + shape)
+            // Each hand controls a different sound
+            // =========================================
+            const fistThreshold = 0.55;
+            const holdTimeRequired = 500;  // 0.5 seconds hold before activation
+            const maxHands = Math.min(handState?.count || 0, 2);
         
-        // Initialize gesture tracking state if not present
-        if (!this.gestureState) {
-            this.gestureState = {
-                fingerMode: 0,
-                fingerModeIntensity: 0,
-                thumbsUpStart: 0,
-                thumbsDownStart: 0,
-                thumbsUpActive: false,
-                thumbsDownActive: false,
-                lastFingerCount: 0,
-                fingerHoldStart: 0
-            };
-        }
-        
-        // Track best open palm for liquid effect (already handled in visual via strengths)
-        // Track best closed fist for pitch control
-        if (handState && handState.count > 0) {
-            for (let i = 0; i < handState.count; i++) {
-                const fist = handState.fists?.[i] ?? 0;
-                if (fist > bestFist) {
-                    bestFist = fist;
-                    bestVelY = handState.velocities?.[i]?.y ?? 0;
-                    fistHandIndex = i;
+        for (let i = 0; i < 2; i++) {
+            const control = this.handFistControls[i];
+            const fist = (i < maxHands) ? (handState?.fists?.[i] ?? 0) : 0;
+            const pos = handState?.positions?.[i] || { x: 0.5, y: 0.5 };
+            const isFist = fist > fistThreshold;
+            
+            if (isFist && i < maxHands) {
+                if (!control.active) {
+                    // Just started making fist - start hold timer
+                    if (control.holdStart === 0) {
+                        control.holdStart = now;
+                        control.initialY = pos.y;
+                        control.initialX = pos.x;
+                    }
+                    
+                    // Check if hold time met
+                    if (now - control.holdStart >= holdTimeRequired) {
+                        // Activate! Assign a sound to this hand
+                        control.active = true;
+                        control.soundIndex = i % this.controlableSounds.length;
+                        control.targetSound = this.controlableSounds[control.soundIndex];
+                        // Use current position as initial reference
+                        control.initialY = pos.y;
+                        control.initialX = pos.x;
+                        console.log(`Hand ${i} grabbed sound: ${control.targetSound}`);
+                    }
+                } else {
+                    // Already active - apply continuous pitch/shape control
+                    // Y movement = pitch (up = higher, down = lower)
+                    const deltaY = control.initialY - pos.y;  // Positive = moved up
+                    const pitchSemitones = deltaY * 24;  // -12 to +12 semitones range
+                    const pitchCents = pitchSemitones * 100;
+                    
+                    // X movement = sound shape (filter/character)
+                    const deltaX = pos.x - control.initialX;  // Positive = moved right
+                    const shapeAmount = Utils.clamp(0.5 + deltaX * 2, 0, 1);
+                    
+                    // Smooth the values
+                    control.currentPitch += (pitchCents - control.currentPitch) * 0.1;
+                    control.currentShape += (shapeAmount - control.currentShape) * 0.1;
+                    
+                    // Apply to audio engine
+                    this.audioEngine.applyHandSoundControl?.(
+                        control.targetSound, 
+                        control.currentPitch, 
+                        control.currentShape
+                    );
                 }
-                
-                // Get finger count and thumb gestures
-                const fingers = handState.fingerCounts?.[i] ?? 0;
+            } else {
+                // Fist released - immediately stop control
+                if (control.active) {
+                    console.log(`Hand ${i} released sound: ${control.targetSound}`);
+                    // Reset the sound to neutral
+                    this.audioEngine.resetHandSoundControl?.(control.targetSound);
+                }
+                control.active = false;
+                control.holdStart = 0;
+                control.targetSound = null;
+                // Smoothly return pitch/shape to neutral - snap to 0 when close to prevent dissonance
+                control.currentPitch *= 0.92;
+                if (Math.abs(control.currentPitch) < 5) {
+                    control.currentPitch = 0;  // Snap to exactly 0 to prevent lingering dissonance
+                }
+                control.currentShape += (0.5 - control.currentShape) * 0.1;
+                if (Math.abs(control.currentShape - 0.5) < 0.02) {
+                    control.currentShape = 0.5;  // Snap to center
+                }
+            }
+            
+            // Get finger count and thumb gestures
+            if (i < maxHands) {
+                const fingers = handState?.fingerCounts?.[i] ?? 0;
                 if (fingers > bestFingerCount) {
                     bestFingerCount = fingers;
                 }
-                if (handState.thumbsUp?.[i]) anyThumbsUp = true;
-                if (handState.thumbsDown?.[i]) anyThumbsDown = true;
+                if (handState?.thumbsUp?.[i]) anyThumbsUp = true;
+                if (handState?.thumbsDown?.[i]) anyThumbsDown = true;
             }
         }
         
-        const upwardSpeed = -bestVelY;  // Negative Y velocity = moving up
-        const moveThreshold = 0.25;     // Lower threshold for easier triggering
-        const fistThreshold = 0.55;     // Lower threshold - easier to trigger with fist
-        const stepCooldown = 300;       // Faster stepping
-        const returnDelay = 5000;       // 5 seconds before pitch returns to normal
-        
-        // Fist with vertical motion = pitch shift (no palm facing requirement)
-        if (bestFist > fistThreshold && Math.abs(upwardSpeed) > moveThreshold) {
-            if (now - this.handPitch.lastStepTime > stepCooldown) {
-                const direction = upwardSpeed > 0 ? 1 : -1;
-                const maxIndex = this.handPitch.scale.length - 1;
-                this.handPitch.index = Utils.clamp(this.handPitch.index + direction, 0, maxIndex);
-                this.handPitch.targetCents = this.handPitch.scale[this.handPitch.index] * 100;
-                this.handPitch.lastStepTime = now;
-                this.handPitch.lastActiveTime = now;  // Track last activity for return delay
+        // Legacy global pitch system (backup if no per-hand control active)
+        // Only active if no hands are in fist control mode
+        const anyFistActive = this.handFistControls.some(c => c.active);
+        if (!anyFistActive) {
+            // Slowly return global pitch to neutral
+            const glide = Utils.clamp(deltaTime * 0.5, 0, 1);
+            this.handPitch.currentCents *= (1 - glide);
+            // Snap to exactly 0 when close to prevent lingering pitch offset
+            if (Math.abs(this.handPitch.currentCents) < 5) {
+                this.handPitch.currentCents = 0;
             }
-        }
-        
-        // Slowly return to original pitch after 5 seconds of inactivity
-        const timeSinceActive = now - (this.handPitch.lastActiveTime || 0);
-        if (bestFist < 0.4 && timeSinceActive > returnDelay) {
-            // Slowly drift target back to center (index 4 = no shift)
-            const centerIndex = 4;  // Middle of scale = 0 semitones
-            if (this.handPitch.index !== centerIndex) {
-                // Very slow return - one step per second
-                const returnCooldown = 1000;
-                if (now - (this.handPitch.lastReturnStep || 0) > returnCooldown) {
-                    const direction = this.handPitch.index > centerIndex ? -1 : 1;
-                    this.handPitch.index = Utils.clamp(this.handPitch.index + direction, 0, this.handPitch.scale.length - 1);
-                    this.handPitch.targetCents = this.handPitch.scale[this.handPitch.index] * 100;
-                    this.handPitch.lastReturnStep = now;
-                }
+            if (Math.abs(this.handPitch.currentCents) > 1) {
+                this.audioEngine.setHandDetune?.(this.handPitch.currentCents);
+            } else if (this.handPitch.currentCents === 0) {
+                // Ensure we explicitly reset to 0
+                this.audioEngine.setHandDetune?.(0);
             }
-        }
-        
-        // Smooth glide to target pitch
-        const glide = Utils.clamp(deltaTime * 1.5, 0, 1);  // Slower glide for smoother pitch
-        this.handPitch.currentCents += (this.handPitch.targetCents - this.handPitch.currentCents) * glide;
-        if (this.audioEngine.setHandDetune) {
-            this.audioEngine.setHandDetune(this.handPitch.currentCents);
         }
         
         // =========================================
         // FINGER COUNT GESTURES (1-4 fingers)
         // =========================================
+        const bestFist = Math.max(...(handState?.fists || [0]));
         if (bestFingerCount > 0 && bestFingerCount <= 4 && bestFist < 0.4) {
             // Finger gesture detected
             if (this.gestureState.lastFingerCount !== bestFingerCount) {
@@ -2386,6 +2481,10 @@ class InnerReflectionApp {
             this.gestureState.thumbsDownStart = 0;
             this.gestureState.thumbsDownActive = false;
         }
+        } catch (error) {
+            // Prevent gesture errors from freezing the experience
+            console.warn('Hand gesture error (non-fatal):', error.message);
+        }
     }
     
     // Apply thumbs up visual effect - boost brightness and saturation
@@ -2458,6 +2557,8 @@ class InnerReflectionApp {
             palmFacing: Array.from({ length: maxHands }, (_, i) => handState?.palmFacing?.[i] || false),
             fists: Array.from({ length: maxHands }, (_, i) => handState?.fists?.[i] || 0),
             fingerCounts: Array.from({ length: maxHands }, (_, i) => handState?.fingerCounts?.[i] || 0),
+            allFingersExtended: Array.from({ length: maxHands }, (_, i) => handState?.allFingersExtended?.[i] || false),
+            thumbExtended: Array.from({ length: maxHands }, (_, i) => handState?.thumbExtended?.[i] || false),
             thumbsUp: Array.from({ length: maxHands }, (_, i) => handState?.thumbsUp?.[i] || false),
             thumbsDown: Array.from({ length: maxHands }, (_, i) => handState?.thumbsDown?.[i] || false),
             influence: handState?.influence || 0,
@@ -3643,6 +3744,8 @@ class InnerReflectionApp {
         if (preset) {
             if (preset.state) {
                 Object.entries(preset.state).forEach(([key, value]) => {
+                    // Skip vignette - don't include in presets
+                    if (key === 'vignette') return;
                     const sliderId = this.stateSliderByDimension.get(key);
                     if (sliderId && this.lockedSliders.has(sliderId)) return;
                     this.setStateDimensionInstant(key, value);
@@ -3657,17 +3760,137 @@ class InnerReflectionApp {
                 });
             }
             
-            if (preset.vignetteShape !== undefined) {
-                const vignetteSlider = this.manualSliderByKey.get('vignetteShape') || 'ctrl-vignetteShape';
-                if (!this.lockedSliders.has(vignetteSlider)) {
-                    this.vignetteShape = preset.vignetteShape;
-                }
-            }
+            // Note: vignetteShape is no longer applied from presets
             
             // Update slider positions
             this.updateSliderFromState();
             this.updateManualSliders();
         }
+    }
+    
+    // Apply sound preset to audio engine
+    applySoundPreset(presetName) {
+        if (!this.audioEngine) {
+            console.warn('Sound preset: Audio engine not available');
+            return;
+        }
+        if (!this.audioEngine.isInitialized) {
+            console.warn('Sound preset: Audio engine not initialized - click somewhere first to enable audio');
+            return;
+        }
+        console.log('Applying sound preset:', presetName);
+        
+        const soundPresets = {
+            // Deep - emphasizes bass and sub frequencies
+            deep: {
+                droneVolumes: { base: -12, mid: -20, high: -28, pad: -15 },
+                droneFilters: { base: 300, mid: 400, high: 1500 },
+                effectSettings: {
+                    reverbWet: 0.6,
+                    delayWet: 0.2,
+                    delayFeedback: 0.4
+                }
+            },
+            
+            // Ethereal - airy, spacious, high harmonics
+            ethereal: {
+                droneVolumes: { base: -24, mid: -18, high: -14, pad: -20 },
+                droneFilters: { base: 150, mid: 1200, high: 4000 },
+                effectSettings: {
+                    reverbWet: 0.8,
+                    delayWet: 0.5,
+                    delayFeedback: 0.6
+                }
+            },
+            
+            // Warm - mid-focused, cozy, rounded
+            warm: {
+                droneVolumes: { base: -16, mid: -14, high: -22, pad: -16 },
+                droneFilters: { base: 250, mid: 600, high: 2000 },
+                effectSettings: {
+                    reverbWet: 0.4,
+                    delayWet: 0.3,
+                    delayFeedback: 0.35
+                }
+            },
+            
+            // Crystal - bright, clear, shimmering
+            crystal: {
+                droneVolumes: { base: -26, mid: -16, high: -12, pad: -22 },
+                droneFilters: { base: 120, mid: 1500, high: 6000 },
+                effectSettings: {
+                    reverbWet: 0.7,
+                    delayWet: 0.6,
+                    delayFeedback: 0.55
+                }
+            },
+            
+            // Dark - brooding, mysterious, filtered
+            dark: {
+                droneVolumes: { base: -14, mid: -18, high: -30, pad: -12 },
+                droneFilters: { base: 180, mid: 350, high: 800 },
+                effectSettings: {
+                    reverbWet: 0.7,
+                    delayWet: 0.4,
+                    delayFeedback: 0.5
+                }
+            },
+            
+            // Breath - organic, pulsing, alive
+            breath: {
+                droneVolumes: { base: -18, mid: -16, high: -20, pad: -14 },
+                droneFilters: { base: 200, mid: 700, high: 2500 },
+                effectSettings: {
+                    reverbWet: 0.5,
+                    delayWet: 0.35,
+                    delayFeedback: 0.45
+                }
+            }
+        };
+        
+        const preset = soundPresets[presetName];
+        if (!preset) return;
+        
+        const rampTime = 1.5;  // Smooth transition time
+        
+        // Apply drone volumes
+        if (preset.droneVolumes) {
+            Object.entries(preset.droneVolumes).forEach(([drone, volume]) => {
+                if (this.audioEngine.drones && this.audioEngine.drones[drone]) {
+                    console.log(`  Setting ${drone} volume to ${volume} dB`);
+                    this.audioEngine.setDroneVolume(drone, volume, rampTime);
+                }
+            });
+        }
+        
+        // Apply drone filters
+        if (preset.droneFilters) {
+            Object.entries(preset.droneFilters).forEach(([drone, freq]) => {
+                if (this.audioEngine.drones && this.audioEngine.drones[drone]) {
+                    console.log(`  Setting ${drone} filter to ${freq} Hz`);
+                    this.audioEngine.setDroneFilter(drone, freq, rampTime);
+                }
+            });
+        }
+        
+        // Apply effect settings
+        if (preset.effectSettings) {
+            const fx = preset.effectSettings;
+            if (fx.reverbWet !== undefined && this.audioEngine.effects?.reverb) {
+                console.log(`  Setting reverb wet to ${fx.reverbWet}`);
+                this.audioEngine.setEffectWet('reverb', fx.reverbWet, rampTime);
+            }
+            if (fx.delayWet !== undefined && this.audioEngine.effects?.delay) {
+                console.log(`  Setting delay wet to ${fx.delayWet}`);
+                this.audioEngine.setEffectWet('delay', fx.delayWet, rampTime);
+            }
+            if (fx.delayFeedback !== undefined && this.audioEngine.effects?.delay) {
+                console.log(`  Setting delay feedback to ${fx.delayFeedback}`);
+                this.audioEngine.effects.delay.feedback.rampTo(fx.delayFeedback, rampTime);
+            }
+        }
+        
+        console.log('Sound preset applied:', presetName);
     }
     
     updateSliderFromState() {

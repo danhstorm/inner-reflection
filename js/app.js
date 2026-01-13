@@ -324,17 +324,6 @@ class InnerReflectionApp {
         
         // Start button
         this.startButton.addEventListener('click', () => this.start());
-        
-        // Start screen settings button
-        const startSettings = document.getElementById('start-settings');
-        if (startSettings) {
-            startSettings.addEventListener('click', () => {
-                const debugPanel = document.getElementById('debug-panel');
-                if (debugPanel) {
-                    debugPanel.style.display = 'block';
-                }
-            });
-        }
 
         // Face overlay close button
         if (this.faceCloseButton) {
@@ -1382,6 +1371,14 @@ class InnerReflectionApp {
             });
         }
         
+        // Make header title ("Controls") clickable to close panel
+        const debugHeaderTitle = debugPanel?.querySelector('.debug-header h3');
+        if (debugHeaderTitle) {
+            debugHeaderTitle.addEventListener('click', () => {
+                debugPanel.style.display = 'none';
+            });
+        }
+        
         // Sound on/off toggle
         if (soundToggle) {
             soundToggle.addEventListener('click', () => {
@@ -1642,6 +1639,26 @@ class InnerReflectionApp {
         this.setupSlider('ctrl-dronePad', 'val-dronePad', (v, fast) => {
             // Pad volume is direct control (not in state system)
             this.audioEngine?.setDroneVolume('pad', v, sliderRamp(fast, 0.15, 0.03));
+        });
+        
+        // =========================================
+        // AUDIO CONTROLS - Ambient Layers
+        // =========================================
+        
+        // Ambient layer toggles
+        this.setupAmbientToggle('ctrl-ambient-sub', 'subBass');
+        this.setupAmbientToggle('ctrl-ambient-breath', 'breath');
+        this.setupAmbientToggle('ctrl-ambient-shimmer', 'shimmerPad');
+        
+        // Ambient layer volume sliders
+        this.setupSlider('ctrl-ambientSub', 'val-ambientSub', (v, fast) => {
+            this.audioEngine?.setAmbientVolume('subBass', v, sliderRamp(fast, 0.15, 0.03));
+        });
+        this.setupSlider('ctrl-ambientBreath', 'val-ambientBreath', (v, fast) => {
+            this.audioEngine?.setAmbientVolume('breath', v, sliderRamp(fast, 0.15, 0.03));
+        });
+        this.setupSlider('ctrl-ambientShimmer', 'val-ambientShimmer', (v, fast) => {
+            this.audioEngine?.setAmbientVolume('shimmerPad', v, sliderRamp(fast, 0.15, 0.03));
         });
         
         // =========================================
@@ -1965,42 +1982,216 @@ class InnerReflectionApp {
         const now = performance.now();
         let bestFist = 0;
         let bestVelY = 0;
-        let bestPalm = false;
+        let fistHandIndex = -1;
+        let bestFingerCount = 0;
+        let anyThumbsUp = false;
+        let anyThumbsDown = false;
         
+        // Initialize gesture tracking state if not present
+        if (!this.gestureState) {
+            this.gestureState = {
+                fingerMode: 0,
+                fingerModeIntensity: 0,
+                thumbsUpStart: 0,
+                thumbsDownStart: 0,
+                thumbsUpActive: false,
+                thumbsDownActive: false,
+                lastFingerCount: 0,
+                fingerHoldStart: 0
+            };
+        }
+        
+        // Track best open palm for liquid effect (already handled in visual via strengths)
+        // Track best closed fist for pitch control
         if (handState && handState.count > 0) {
             for (let i = 0; i < handState.count; i++) {
                 const fist = handState.fists?.[i] ?? 0;
                 if (fist > bestFist) {
                     bestFist = fist;
                     bestVelY = handState.velocities?.[i]?.y ?? 0;
-                    bestPalm = handState.palmFacing?.[i] ?? false;
+                    fistHandIndex = i;
                 }
+                
+                // Get finger count and thumb gestures
+                const fingers = handState.fingerCounts?.[i] ?? 0;
+                if (fingers > bestFingerCount) {
+                    bestFingerCount = fingers;
+                }
+                if (handState.thumbsUp?.[i]) anyThumbsUp = true;
+                if (handState.thumbsDown?.[i]) anyThumbsDown = true;
             }
         }
         
-        const upwardSpeed = -bestVelY;
-        const moveThreshold = 0.35;
-        const fistThreshold = 0.65;
-        const stepCooldown = 360;
+        const upwardSpeed = -bestVelY;  // Negative Y velocity = moving up
+        const moveThreshold = 0.25;     // Lower threshold for easier triggering
+        const fistThreshold = 0.55;     // Lower threshold - easier to trigger with fist
+        const stepCooldown = 300;       // Faster stepping
+        const returnDelay = 5000;       // 5 seconds before pitch returns to normal
         
-        if (bestFist > fistThreshold && bestPalm && Math.abs(upwardSpeed) > moveThreshold) {
+        // Fist with vertical motion = pitch shift (no palm facing requirement)
+        if (bestFist > fistThreshold && Math.abs(upwardSpeed) > moveThreshold) {
             if (now - this.handPitch.lastStepTime > stepCooldown) {
                 const direction = upwardSpeed > 0 ? 1 : -1;
                 const maxIndex = this.handPitch.scale.length - 1;
                 this.handPitch.index = Utils.clamp(this.handPitch.index + direction, 0, maxIndex);
                 this.handPitch.targetCents = this.handPitch.scale[this.handPitch.index] * 100;
                 this.handPitch.lastStepTime = now;
+                this.handPitch.lastActiveTime = now;  // Track last activity for return delay
             }
         }
         
-        if (bestFist < 0.4) {
-            this.handPitch.targetCents = 0;
+        // Slowly return to original pitch after 5 seconds of inactivity
+        const timeSinceActive = now - (this.handPitch.lastActiveTime || 0);
+        if (bestFist < 0.4 && timeSinceActive > returnDelay) {
+            // Slowly drift target back to center (index 4 = no shift)
+            const centerIndex = 4;  // Middle of scale = 0 semitones
+            if (this.handPitch.index !== centerIndex) {
+                // Very slow return - one step per second
+                const returnCooldown = 1000;
+                if (now - (this.handPitch.lastReturnStep || 0) > returnCooldown) {
+                    const direction = this.handPitch.index > centerIndex ? -1 : 1;
+                    this.handPitch.index = Utils.clamp(this.handPitch.index + direction, 0, this.handPitch.scale.length - 1);
+                    this.handPitch.targetCents = this.handPitch.scale[this.handPitch.index] * 100;
+                    this.handPitch.lastReturnStep = now;
+                }
+            }
         }
         
-        const glide = Utils.clamp(deltaTime * 2.2, 0, 1);
+        // Smooth glide to target pitch
+        const glide = Utils.clamp(deltaTime * 1.5, 0, 1);  // Slower glide for smoother pitch
         this.handPitch.currentCents += (this.handPitch.targetCents - this.handPitch.currentCents) * glide;
         if (this.audioEngine.setHandDetune) {
             this.audioEngine.setHandDetune(this.handPitch.currentCents);
+        }
+        
+        // =========================================
+        // FINGER COUNT GESTURES (1-4 fingers)
+        // =========================================
+        if (bestFingerCount > 0 && bestFingerCount <= 4 && bestFist < 0.4) {
+            // Finger gesture detected
+            if (this.gestureState.lastFingerCount !== bestFingerCount) {
+                // Changed finger count
+                this.gestureState.fingerHoldStart = now;
+                this.gestureState.lastFingerCount = bestFingerCount;
+            }
+            
+            // Build up intensity over time (0-1 over 2 seconds)
+            const holdTime = now - this.gestureState.fingerHoldStart;
+            const targetIntensity = Utils.clamp(holdTime / 2000, 0, 1);
+            
+            // Smoothly approach target intensity
+            this.gestureState.fingerModeIntensity += (targetIntensity - this.gestureState.fingerModeIntensity) * 0.1;
+            this.gestureState.fingerMode = bestFingerCount;
+            
+            // Apply the finger mode to audio
+            if (this.audioEngine.applyFingerMode) {
+                this.audioEngine.applyFingerMode(bestFingerCount, this.gestureState.fingerModeIntensity);
+            }
+        } else if (this.gestureState.fingerMode > 0) {
+            // No fingers held up - fade out effect
+            this.gestureState.fingerModeIntensity *= 0.95;
+            if (this.gestureState.fingerModeIntensity < 0.05) {
+                this.gestureState.fingerMode = 0;
+                this.gestureState.fingerModeIntensity = 0;
+                this.gestureState.lastFingerCount = 0;
+                // Reset audio to normal
+                if (this.audioEngine.resetFingerMode) {
+                    this.audioEngine.resetFingerMode();
+                }
+            }
+        }
+        
+        // =========================================
+        // THUMBS UP GESTURE - Brightness boost
+        // =========================================
+        const thumbsUpHoldTime = 1000;  // 1 second to activate
+        if (anyThumbsUp) {
+            if (this.gestureState.thumbsUpStart === 0) {
+                this.gestureState.thumbsUpStart = now;
+            }
+            const heldTime = now - this.gestureState.thumbsUpStart;
+            if (heldTime > thumbsUpHoldTime && !this.gestureState.thumbsUpActive) {
+                this.gestureState.thumbsUpActive = true;
+                // Trigger visual brightness/saturation boost
+                this.applyThumbsUpVisual(true);
+            }
+        } else {
+            if (this.gestureState.thumbsUpActive) {
+                // Thumbs up released
+                this.applyThumbsUpVisual(false);
+            }
+            this.gestureState.thumbsUpStart = 0;
+            this.gestureState.thumbsUpActive = false;
+        }
+        
+        // =========================================
+        // THUMBS DOWN GESTURE - Randomize scene
+        // =========================================
+        const thumbsDownHoldTime = 1000;  // 1 second to activate
+        if (anyThumbsDown) {
+            if (this.gestureState.thumbsDownStart === 0) {
+                this.gestureState.thumbsDownStart = now;
+            }
+            const heldTime = now - this.gestureState.thumbsDownStart;
+            if (heldTime > thumbsDownHoldTime) {
+                if (!this.gestureState.thumbsDownActive) {
+                    this.gestureState.thumbsDownActive = true;
+                }
+                // Continuously randomize while held
+                if (now - (this.gestureState.lastRandomize || 0) > 500) {  // Every 500ms
+                    this.applyThumbsDownRandomize();
+                    this.gestureState.lastRandomize = now;
+                }
+            }
+        } else {
+            this.gestureState.thumbsDownStart = 0;
+            this.gestureState.thumbsDownActive = false;
+        }
+    }
+    
+    // Apply thumbs up visual effect - boost brightness and saturation
+    applyThumbsUpVisual(active) {
+        if (!this.visualEngine) return;
+        
+        if (active) {
+            // Store current values and boost
+            this.thumbsUpOriginal = {
+                brightness: this.stateEngine?.get('colorBrightness') ?? 0.55,
+                saturation: this.stateEngine?.get('colorSaturation') ?? 0.7
+            };
+            // Boost brightness and saturation
+            if (this.stateEngine) {
+                this.stateEngine.set('colorBrightness', Math.min(1, this.thumbsUpOriginal.brightness + 0.25));
+                this.stateEngine.set('colorSaturation', Math.min(1, this.thumbsUpOriginal.saturation + 0.2));
+            }
+        } else {
+            // Restore original values
+            if (this.thumbsUpOriginal && this.stateEngine) {
+                this.stateEngine.set('colorBrightness', this.thumbsUpOriginal.brightness);
+                this.stateEngine.set('colorSaturation', this.thumbsUpOriginal.saturation);
+            }
+        }
+    }
+    
+    // Apply thumbs down randomization
+    applyThumbsDownRandomize() {
+        // Randomize audio
+        if (this.audioEngine?.randomizeParameters) {
+            this.audioEngine.randomizeParameters();
+        }
+        
+        // Randomize visual state parameters
+        if (this.stateEngine) {
+            // Randomly shift hues
+            this.stateEngine.set('colorHue1', Math.random());
+            this.stateEngine.set('colorHue2', Math.random());
+            this.stateEngine.set('colorHue3', Math.random());
+            this.stateEngine.set('colorHue4', Math.random());
+            
+            // Randomly shift other visual parameters
+            this.stateEngine.set('displacementStrength', 0.1 + Math.random() * 0.3);
+            this.stateEngine.set('shapeType', Math.floor(Math.random() * 12));
+            this.stateEngine.set('waveAmplitude', Math.random() * 0.2);
         }
     }
 
@@ -2022,6 +2213,9 @@ class InnerReflectionApp {
             strengths: Array.from({ length: maxHands }, (_, i) => handState?.strengths?.[i] || 0),
             palmFacing: Array.from({ length: maxHands }, (_, i) => handState?.palmFacing?.[i] || false),
             fists: Array.from({ length: maxHands }, (_, i) => handState?.fists?.[i] || 0),
+            fingerCounts: Array.from({ length: maxHands }, (_, i) => handState?.fingerCounts?.[i] || 0),
+            thumbsUp: Array.from({ length: maxHands }, (_, i) => handState?.thumbsUp?.[i] || false),
+            thumbsDown: Array.from({ length: maxHands }, (_, i) => handState?.thumbsDown?.[i] || false),
             influence: handState?.influence || 0,
             visibility: handState?.visibility || 0,
             landmarks: handState?.landmarks || []
@@ -2220,6 +2414,15 @@ class InnerReflectionApp {
         if (checkbox) {
             checkbox.addEventListener('change', (e) => {
                 this.audioEngine?.toggleGranularLayer(layerName, e.target.checked);
+            });
+        }
+    }
+    
+    setupAmbientToggle(checkboxId, layerName) {
+        const checkbox = document.getElementById(checkboxId);
+        if (checkbox) {
+            checkbox.addEventListener('change', (e) => {
+                this.audioEngine?.toggleAmbientLayer(layerName, e.target.checked);
             });
         }
     }

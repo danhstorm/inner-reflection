@@ -52,7 +52,6 @@
     
     <!-- Start Screen Overlay -->
     <div id="start-screen" class="start-screen">
-        <button id="start-settings" class="start-settings" type="button">Settings</button>
         <div class="start-content">
             <h1 class="start-title glass-text" style="color: white;">INNER REFLECTION</h1>
             
@@ -141,8 +140,8 @@
                 <div class="debug-section">
                     <h4>Global Mix</h4>
                     <div class="slider-group">
-                        <label>Master Volume: <span id="val-volume">0.5</span></label>
-                        <input type="range" id="ctrl-volume" min="0" max="1" step="0.05" value="0.5">
+                        <label>Master Volume: <span id="val-volume">0.7</span></label>
+                        <input type="range" id="ctrl-volume" min="0" max="1" step="0.05" value="0.7">
                     </div>
                     <div class="checkbox-group">
                         <label><input type="checkbox" id="ctrl-mute"> Mute All Audio</label>
@@ -543,9 +542,8 @@
                         </div>
                     </div>
                 </div>
-                <div class="audio-group" data-audio-group="drone-pad">
+                <div class="audio-group no-fold" data-audio-group="drone-pad">
                     <div class="audio-group-head">
-                        <button class="audio-group-toggle" type="button" aria-expanded="true">v</button>
                         <div class="audio-group-title">Drone Pad</div>
                         <label class="checkbox-inline"><input type="checkbox" id="ctrl-drone-pad" checked>On</label>
                         <div class="audio-group-volume">
@@ -553,8 +551,35 @@
                             <input type="range" id="ctrl-dronePad" min="-40" max="0" step="1" value="-18">
                         </div>
                     </div>
-                    <div class="audio-group-body">
-                        <div class="audio-group-note">No extra controls</div>
+                </div>
+                <div class="audio-group no-fold" data-audio-group="ambient-sub">
+                    <div class="audio-group-head">
+                        <div class="audio-group-title">Sub Bass</div>
+                        <label class="checkbox-inline"><input type="checkbox" id="ctrl-ambient-sub" checked>On</label>
+                        <div class="audio-group-volume">
+                            <label>Vol <span id="val-ambientSub">-22</span>dB</label>
+                            <input type="range" id="ctrl-ambientSub" min="-40" max="0" step="1" value="-22">
+                        </div>
+                    </div>
+                </div>
+                <div class="audio-group no-fold" data-audio-group="ambient-breath">
+                    <div class="audio-group-head">
+                        <div class="audio-group-title">Breath</div>
+                        <label class="checkbox-inline"><input type="checkbox" id="ctrl-ambient-breath" checked>On</label>
+                        <div class="audio-group-volume">
+                            <label>Vol <span id="val-ambientBreath">-28</span>dB</label>
+                            <input type="range" id="ctrl-ambientBreath" min="-40" max="0" step="1" value="-28">
+                        </div>
+                    </div>
+                </div>
+                <div class="audio-group no-fold" data-audio-group="ambient-shimmer">
+                    <div class="audio-group-head">
+                        <div class="audio-group-title">Shimmer Pad</div>
+                        <label class="checkbox-inline"><input type="checkbox" id="ctrl-ambient-shimmer" checked>On</label>
+                        <div class="audio-group-volume">
+                            <label>Vol <span id="val-ambientShimmer">-24</span>dB</label>
+                            <input type="range" id="ctrl-ambientShimmer" min="-40" max="0" step="1" value="-24">
+                        </div>
                     </div>
                 </div>
                 <div class="audio-group" data-audio-group="gran-ambient">

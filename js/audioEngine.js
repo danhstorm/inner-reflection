@@ -1154,6 +1154,11 @@ class AudioEngine {
         
         console.log('AudioEngine: Starting playback...');
         
+        // Fade up master gain from 0 over 3 seconds for smooth start
+        const targetGain = this.unmutedGain || this.masterGain.gain.value || Tone.dbToGain(CONFIG.audio.masterVolume + 2);
+        this.masterGain.gain.value = 0;
+        this.masterGain.gain.rampTo(targetGain, 3.0);
+        
         // Start each drone layer
         Object.keys(this.drones).forEach(key => {
             const drone = this.drones[key];
@@ -1172,7 +1177,7 @@ class AudioEngine {
         this.startGranularLayers();
         
         this.isPlaying = true;
-        console.log('AudioEngine: Playback started');
+        console.log('AudioEngine: Playback started with fade-up');
     }
     
     startAmbientLayers() {
@@ -1441,8 +1446,195 @@ class AudioEngine {
     setHandDetune(cents) {
         const clamped = Utils.clamp(cents, -2400, 2400);
         this.handDetune = clamped;
+        
+        // Apply detune to different drones with varying amounts for rich harmonic movement
+        const droneNames = ['base', 'mid', 'high', 'pad'];
+        const detuneMultipliers = [1.0, 0.75, 1.25, 0.5];  // Different amounts for each drone
+        
+        droneNames.forEach((name, index) => {
+            const drone = this.drones[name];
+            if (drone && drone.synth && drone.isPlaying) {
+                const droneDetune = clamped * detuneMultipliers[index];
+                drone.synth.set({ detune: droneDetune });
+            }
+        });
+        
+        // Also affect shimmer pad
         if (this.ambientLayers?.shimmerPad) {
-            this.ambientLayers.shimmerPad.set({ detune: clamped });
+            this.ambientLayers.shimmerPad.set({ detune: clamped * 0.8 });
+        }
+    }
+    
+    // Set hand gesture pitch effect that fades out over time
+    applyHandGesturePitch(cents, fadeTime = 5.0) {
+        // This creates a new pitch effect that will fade out
+        const clamped = Utils.clamp(cents, -2400, 2400);
+        
+        // Apply to a subset of sounds to create variation
+        const targetIndex = Math.floor(Math.random() * 4);
+        const droneNames = ['base', 'mid', 'high', 'pad'];
+        const drone = this.drones[droneNames[targetIndex]];
+        
+        if (drone && drone.synth && drone.isPlaying) {
+            // Set the detune then schedule a fade back
+            drone.synth.set({ detune: clamped });
+            
+            // Slowly return to base detune over fadeTime
+            const startTime = Tone.now();
+            const fadeInterval = setInterval(() => {
+                const elapsed = Tone.now() - startTime;
+                const progress = Math.min(1, elapsed / fadeTime);
+                const currentDetune = clamped * (1 - progress);
+                drone.synth.set({ detune: currentDetune });
+                
+                if (progress >= 1) {
+                    clearInterval(fadeInterval);
+                }
+            }, 100);
+        }
+    }
+    
+    // Apply finger count mode - introduces new layers/modulations
+    applyFingerMode(fingerCount, intensity) {
+        if (!this.isPlaying) return;
+        
+        // Each finger count triggers different sound modifications
+        // intensity 0-1 controls how strong the effect is
+        const vol = Utils.clamp(intensity, 0, 1);
+        
+        switch(fingerCount) {
+            case 1:
+                // One finger - boost sub bass, add depth
+                if (this.ambientLayers?.subGain) {
+                    const targetDb = -22 + vol * 12;  // Bring up sub bass
+                    this.ambientLayers.subGain.gain.rampTo(Tone.dbToGain(targetDb), 0.5);
+                }
+                break;
+            case 2:
+                // Two fingers - boost shimmer and breath
+                if (this.ambientLayers?.shimmerGain) {
+                    const targetDb = -24 + vol * 14;
+                    this.ambientLayers.shimmerGain.gain.rampTo(Tone.dbToGain(targetDb), 0.5);
+                }
+                if (this.ambientLayers?.breathGain) {
+                    const targetDb = -28 + vol * 12;
+                    this.ambientLayers.breathGain.gain.rampTo(Tone.dbToGain(targetDb), 0.5);
+                }
+                break;
+            case 3:
+                // Three fingers - boost granular layers
+                if (this.granularLayers) {
+                    ['ambient', 'shimmer'].forEach(name => {
+                        const layer = this.granularLayers[name];
+                        if (layer) {
+                            const baseDb = layer.config?.volume || -18;
+                            const targetDb = baseDb + vol * 8;
+                            layer.gain.gain.rampTo(Tone.dbToGain(targetDb), 0.5);
+                        }
+                    });
+                }
+                break;
+            case 4:
+                // Four fingers - boost effects, more chaotic
+                if (this.effects.reverb) {
+                    this.effects.reverb.wet.rampTo(0.3 + vol * 0.5, 0.3);
+                }
+                if (this.effects.delay) {
+                    this.effects.delay.wet.rampTo(0.2 + vol * 0.4, 0.3);
+                }
+                if (this.effects.phaser) {
+                    this.effects.phaser.wet.rampTo(0.2 + vol * 0.5, 0.3);
+                }
+                break;
+        }
+        
+        // Also apply faster modulation to all drones during finger gestures
+        if (fingerCount > 0 && vol > 0.3) {
+            Object.values(this.drones).forEach((drone, i) => {
+                if (drone && drone.filter) {
+                    // Faster filter movement
+                    const baseFreq = drone.filter.frequency.value;
+                    const modAmount = vol * 400 * Math.sin(Tone.now() * 3 + i);
+                    drone.filter.frequency.rampTo(
+                        Math.max(100, baseFreq + modAmount), 
+                        0.15
+                    );
+                }
+            });
+        }
+    }
+    
+    // Reset finger mode effects
+    resetFingerMode() {
+        // Return ambient layers to default
+        if (this.ambientLayers?.subGain) {
+            this.ambientLayers.subGain.gain.rampTo(Tone.dbToGain(-22), 2.0);
+        }
+        if (this.ambientLayers?.shimmerGain) {
+            this.ambientLayers.shimmerGain.gain.rampTo(Tone.dbToGain(-24), 2.0);
+        }
+        if (this.ambientLayers?.breathGain) {
+            this.ambientLayers.breathGain.gain.rampTo(Tone.dbToGain(-28), 2.0);
+        }
+        
+        // Return effects to normal if not manually controlled
+        if (this.effects.reverb && !this.manualControl.masterReverb) {
+            this.effects.reverb.wet.rampTo(0.15, 2.0);
+        }
+        if (this.effects.delay && !this.manualControl.masterDelay) {
+            this.effects.delay.wet.rampTo(0.1, 2.0);
+        }
+        if (this.effects.phaser) {
+            this.effects.phaser.wet.rampTo(0.2, 2.0);
+        }
+        
+        // Return granular to default
+        if (this.granularLayers) {
+            ['ambient', 'shimmer'].forEach(name => {
+                const layer = this.granularLayers[name];
+                if (layer && layer.config) {
+                    layer.gain.gain.rampTo(Tone.dbToGain(layer.config.volume), 2.0);
+                }
+            });
+        }
+    }
+    
+    // Randomly change all parameters for thumb-down gesture
+    randomizeParameters() {
+        if (!this.isPlaying) return;
+        
+        // Randomly shift drone frequencies and filters
+        Object.values(this.drones).forEach(drone => {
+            if (drone && drone.synth && drone.isPlaying) {
+                const randomDetune = (Math.random() - 0.5) * 400;  // ±200 cents
+                drone.synth.set({ detune: randomDetune });
+            }
+            if (drone && drone.filter) {
+                const currentFreq = drone.filter.frequency.value;
+                const randomFreq = currentFreq * (0.5 + Math.random());
+                drone.filter.frequency.rampTo(Math.max(100, Math.min(8000, randomFreq)), 0.3);
+            }
+        });
+        
+        // Randomize effects
+        if (this.effects.delay) {
+            this.effects.delay.delayTime.rampTo(0.1 + Math.random() * 0.8, 0.5);
+        }
+        if (this.effects.phaser) {
+            this.effects.phaser.frequency.value = 0.1 + Math.random() * 2;
+        }
+        if (this.effects.chorus) {
+            this.effects.chorus.frequency.value = 0.1 + Math.random() * 3;
+        }
+        
+        // Randomize granular playback rates
+        if (this.granularLayers) {
+            Object.values(this.granularLayers).forEach(layer => {
+                if (layer && layer.player) {
+                    const randomRate = 0.3 + Math.random() * 2.5;
+                    layer.player.playbackRate = randomRate;
+                }
+            });
         }
     }
     
@@ -1453,13 +1645,23 @@ class AudioEngine {
         
         if (enabled) {
             if (!drone.isPlaying && this.isPlaying) {
+                // Restore gain first
+                const targetDb = drone.volume || -18;
+                drone.gain.gain.rampTo(Tone.dbToGain(targetDb), 0.5);
+                
                 const notes = this.getHarmonicNotes(drone.frequency);
                 drone.synth.triggerAttack(notes);
                 drone.isPlaying = true;
             }
         } else {
             if (drone.isPlaying) {
-                drone.synth.triggerRelease();
+                // Fade out gain first, then release
+                drone.gain.gain.rampTo(0, 0.5);
+                setTimeout(() => {
+                    try {
+                        drone.synth.triggerRelease();
+                    } catch (e) {}
+                }, 500);
                 drone.isPlaying = false;
             }
         }
@@ -1485,12 +1687,22 @@ class AudioEngine {
                 if (layer.player.state !== 'started') {
                     layer.player.start();
                 }
-                layer.gain.gain.rampTo(Tone.dbToGain(layer.config?.volume || -18), 0.3);
+                layer.gain.gain.rampTo(Tone.dbToGain(layer.config?.volume || -18), 0.5);
+                layer.isEnabled = true;
             } catch (e) {
                 console.warn(`Could not start granular layer ${layerName}:`, e);
             }
         } else {
-            layer.gain.gain.rampTo(0, 0.3);
+            // Fade out then stop completely
+            layer.gain.gain.rampTo(0, 0.5);
+            layer.isEnabled = false;
+            setTimeout(() => {
+                try {
+                    if (!layer.isEnabled && layer.player.state === 'started') {
+                        layer.player.stop();
+                    }
+                } catch (e) {}
+            }, 600);
         }
         
         console.log(`AudioEngine: Granular layer ${layerName} ${enabled ? 'enabled' : 'disabled'}`);
@@ -1550,12 +1762,102 @@ class AudioEngine {
         if (!this.micEffectsGain) return;
         
         if (enabled) {
-            this.micEffectsGain.gain.rampTo(0.15, 0.3);
+            this.micEffectsGain.gain.rampTo(0.15, 0.5);
         } else {
-            this.micEffectsGain.gain.rampTo(0, 0.3);
+            this.micEffectsGain.gain.rampTo(0, 0.5);
         }
         
         console.log(`AudioEngine: Mic effects ${enabled ? 'enabled' : 'disabled'}`);
+    }
+    
+    // Toggle ambient layers (sub bass, breath, shimmer pad)
+    toggleAmbientLayer(layerName, enabled) {
+        if (!this.ambientLayers) return;
+        
+        switch(layerName) {
+            case 'subBass':
+                if (enabled) {
+                    if (this.ambientLayers.subBass && this.ambientLayers.subBass.state !== 'started') {
+                        this.ambientLayers.subBass.start();
+                    }
+                    if (this.ambientLayers.subGain) {
+                        this.ambientLayers.subGain.gain.rampTo(Tone.dbToGain(-22), 0.5);
+                    }
+                } else {
+                    if (this.ambientLayers.subGain) {
+                        this.ambientLayers.subGain.gain.rampTo(0, 0.5);
+                    }
+                    setTimeout(() => {
+                        try {
+                            if (this.ambientLayers.subBass) this.ambientLayers.subBass.stop();
+                        } catch(e) {}
+                    }, 600);
+                }
+                break;
+            case 'breath':
+                if (enabled) {
+                    if (this.ambientLayers.breath && this.ambientLayers.breath.state !== 'started') {
+                        this.ambientLayers.breath.start();
+                    }
+                    if (this.ambientLayers.breathGain) {
+                        this.ambientLayers.breathGain.gain.rampTo(Tone.dbToGain(-28), 0.5);
+                    }
+                } else {
+                    if (this.ambientLayers.breathGain) {
+                        this.ambientLayers.breathGain.gain.rampTo(0, 0.5);
+                    }
+                    setTimeout(() => {
+                        try {
+                            if (this.ambientLayers.breath) this.ambientLayers.breath.stop();
+                        } catch(e) {}
+                    }, 600);
+                }
+                break;
+            case 'shimmerPad':
+                if (enabled) {
+                    if (this.ambientLayers.shimmerPad) {
+                        const notes = ['C5', 'E5', 'G5', 'B5'];
+                        this.ambientLayers.shimmerPad.triggerAttack(notes);
+                    }
+                    if (this.ambientLayers.shimmerGain) {
+                        this.ambientLayers.shimmerGain.gain.rampTo(Tone.dbToGain(-24), 0.5);
+                    }
+                } else {
+                    if (this.ambientLayers.shimmerGain) {
+                        this.ambientLayers.shimmerGain.gain.rampTo(0, 0.5);
+                    }
+                    setTimeout(() => {
+                        try {
+                            if (this.ambientLayers.shimmerPad) this.ambientLayers.shimmerPad.releaseAll();
+                        } catch(e) {}
+                    }, 600);
+                }
+                break;
+        }
+        console.log(`AudioEngine: Ambient layer ${layerName} ${enabled ? 'enabled' : 'disabled'}`);
+    }
+    
+    // Set ambient layer volume
+    setAmbientVolume(layerName, db, rampTime = 0.2) {
+        if (!this.ambientLayers) return;
+        
+        switch(layerName) {
+            case 'subBass':
+                if (this.ambientLayers.subGain) {
+                    this.ambientLayers.subGain.gain.rampTo(Tone.dbToGain(db), rampTime);
+                }
+                break;
+            case 'breath':
+                if (this.ambientLayers.breathGain) {
+                    this.ambientLayers.breathGain.gain.rampTo(Tone.dbToGain(db), rampTime);
+                }
+                break;
+            case 'shimmerPad':
+                if (this.ambientLayers.shimmerGain) {
+                    this.ambientLayers.shimmerGain.gain.rampTo(Tone.dbToGain(db), rampTime);
+                }
+                break;
+        }
     }
     
     // Set mic processing parameter

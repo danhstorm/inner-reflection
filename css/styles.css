@@ -75,29 +75,6 @@ body.interacting {
     transition: opacity 1.5s ease-out, visibility 1.5s;
 }
 
-.start-settings {
-    position: absolute;
-    top: 18px;
-    left: 18px;
-    z-index: 101;
-    padding: 6px 12px;
-    font-size: 11px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: rgba(255, 255, 255, 0.7);
-    cursor: pointer;
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    transition: all 0.2s ease;
-}
-
-.start-settings:hover {
-    background: rgba(255, 255, 255, 0.16);
-    color: rgba(255, 255, 255, 0.95);
-}
-
 @keyframes screenFadeIn {
     from { opacity: 0; }
     to { opacity: 1; }
@@ -535,6 +512,12 @@ body.interacting {
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: rgba(255, 255, 255, 0.6);
+    cursor: pointer;
+    transition: color 0.2s ease;
+}
+
+.debug-header h3:hover {
+    color: rgba(255, 255, 255, 0.9);
 }
 
 .debug-header-buttons {
@@ -605,8 +588,8 @@ body.interacting {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    flex: 1 1 220px;
-    max-width: 360px;
+    flex: 0 0 260px;
+    width: 260px;
     max-height: 70vh;
     padding: 10px;
     border: 1px solid rgba(255, 255, 255, 0.15);
@@ -815,6 +798,14 @@ body.interacting {
 .audio-group-note {
     font-size: 9px;
     color: rgba(255, 255, 255, 0.45);
+}
+
+.audio-group.no-fold .audio-group-toggle {
+    display: none;
+}
+
+.audio-group.no-fold .audio-group-body {
+    display: none;
 }
 
 .slider-group input[type="range"]::-webkit-slider-thumb:hover {

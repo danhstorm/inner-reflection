@@ -98,7 +98,7 @@ class VisualEngine {
             new THREE.Vector2(0, 0),
             new THREE.Vector2(0, 0)
         ];
-        this.handInertiaDecay = 0.96;
+        this.handInertiaDecay = 0.985;  // Very slow decay for lingering liquid effect
         this.fastSmoothingFrames = 0;
     }
     
@@ -381,16 +381,16 @@ class VisualEngine {
                 const strength = hand.strengths?.[i] || 0;
                 const inertia = this.handInertia[i];
                 const active = i < count && (strength > 0.01 || Math.abs(vel.x) + Math.abs(vel.y) > 0.001);
-                const impulse = active ? (0.5 + strength * 1.0) : 0;
+                const impulse = active ? (0.7 + strength * 1.5) : 0;  // Stronger impulse
                 inertia.x = inertia.x * this.handInertiaDecay + vel.x * impulse;
                 inertia.y = inertia.y * this.handInertiaDecay + vel.y * impulse;
 
                 grad.uHandPos.value[i].set(pos.x, pos.y);
                 grad.uHandVel.value[i].set(inertia.x, inertia.y);
-                grad.uHandStrength.value[i] = Math.min(strength * 1.45, 1);
+                grad.uHandStrength.value[i] = Math.min(strength * 1.8, 1);  // Stronger visual effect
                 disp.uHandPos.value[i].set(pos.x, pos.y);
                 disp.uHandVel.value[i].set(inertia.x, inertia.y);
-                disp.uHandStrength.value[i] = Math.min(strength * 1.45, 1);
+                disp.uHandStrength.value[i] = Math.min(strength * 1.8, 1);  // Stronger visual effect
             }
         } else {
             grad.uHandCount.value = 0;

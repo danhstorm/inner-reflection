@@ -31,6 +31,9 @@ class HandTracker {
             strengths: Array.from({ length: this.maxHands }, () => 0),
             palmFacing: Array.from({ length: this.maxHands }, () => false),
             fists: Array.from({ length: this.maxHands }, () => 0),
+            fingerCounts: Array.from({ length: this.maxHands }, () => 0),
+            thumbsUp: Array.from({ length: this.maxHands }, () => false),
+            thumbsDown: Array.from({ length: this.maxHands }, () => false),
             influence: 0,
             visibility: 0,
             landmarks: []
@@ -125,6 +128,9 @@ class HandTracker {
                 this.handState.strengths[i] = 0;
                 this.handState.palmFacing[i] = false;
                 this.handState.fists[i] = 0;
+                this.handState.fingerCounts[i] = 0;
+                this.handState.thumbsUp[i] = false;
+                this.handState.thumbsDown[i] = false;
                 dyn.hold = Math.max(0, dyn.hold - delta * 2);
                 dyn.grab += (0 - dyn.grab) * 0.1;
                 strengths[i] = 0;
@@ -154,6 +160,13 @@ class HandTracker {
             }, 0) / tipIndices.length;
             const fist = Utils.clamp(1 - avgTipDist / (palmSpan * 1.7), 0, 1);
             this.handState.fists[i] = fist;
+            
+            // Count extended fingers (1-4, not counting thumb for finger count)
+            // Finger is extended if tip is far from palm base
+            const fingerInfo = this.countExtendedFingers(hand, palmCenter, palmSpan);
+            this.handState.fingerCounts[i] = fingerInfo.count;
+            this.handState.thumbsUp[i] = fingerInfo.thumbsUp;
+            this.handState.thumbsDown[i] = fingerInfo.thumbsDown;
             
             const tipCenter = tipIndices.reduce((acc, idx) => {
                 acc.z += hand[idx].z;
@@ -202,6 +215,70 @@ class HandTracker {
     
     getHandState() {
         return this.handState;
+    }
+    
+    // Count extended fingers and detect thumbs up/down gestures
+    countExtendedFingers(hand, palmCenter, palmSpan) {
+        // Finger landmarks: 
+        // Thumb: 1-4 (tip=4)
+        // Index: 5-8 (tip=8)
+        // Middle: 9-12 (tip=12)
+        // Ring: 13-16 (tip=16)
+        // Pinky: 17-20 (tip=20)
+        
+        const fingerBases = [5, 9, 13, 17];  // Index, middle, ring, pinky MCP joints
+        const fingerTips = [8, 12, 16, 20];
+        const fingerMids = [6, 10, 14, 18];  // PIP joints (middle of finger)
+        
+        let extendedCount = 0;
+        const threshold = palmSpan * 0.6;
+        
+        // Check each finger (index, middle, ring, pinky)
+        for (let f = 0; f < 4; f++) {
+            const tipIdx = fingerTips[f];
+            const baseIdx = fingerBases[f];
+            const midIdx = fingerMids[f];
+            
+            // Finger is extended if tip is farther from wrist than the mid joint
+            const tipToWrist = Utils.distance(hand[tipIdx].x, hand[tipIdx].y, hand[0].x, hand[0].y);
+            const midToWrist = Utils.distance(hand[midIdx].x, hand[midIdx].y, hand[0].x, hand[0].y);
+            const tipToBase = Utils.distance(hand[tipIdx].x, hand[tipIdx].y, hand[baseIdx].x, hand[baseIdx].y);
+            
+            // Finger extended if tip is far from base and tip is farther than mid from wrist
+            if (tipToBase > threshold * 0.5 && tipToWrist > midToWrist * 0.95) {
+                extendedCount++;
+            }
+        }
+        
+        // Detect thumbs up/down
+        // Thumb tip = 4, thumb base = 1, wrist = 0
+        const thumbTip = hand[4];
+        const thumbBase = hand[1];
+        const wrist = hand[0];
+        const indexBase = hand[5];
+        
+        // Check if thumb is extended (tip far from palm)
+        const thumbExtended = Utils.distance(thumbTip.x, thumbTip.y, palmCenter.x, palmCenter.y) > palmSpan * 0.7;
+        
+        // Check if other fingers are curled (fist-like, count <= 1)
+        const othersCurled = extendedCount <= 1;
+        
+        // Thumbs up: thumb extended upward, other fingers curled
+        // thumb tip Y is significantly above thumb base Y (in image coords, lower Y = higher on screen)
+        const thumbUp = thumbTip.y < thumbBase.y - palmSpan * 0.3;
+        const thumbDown = thumbTip.y > thumbBase.y + palmSpan * 0.3;
+        
+        // Also check thumb is roughly horizontal or vertical, not sideways
+        const thumbVertical = Math.abs(thumbTip.x - thumbBase.x) < palmSpan * 0.5;
+        
+        const isThumbsUp = thumbExtended && othersCurled && thumbUp && thumbVertical;
+        const isThumbsDown = thumbExtended && othersCurled && thumbDown && thumbVertical;
+        
+        return {
+            count: extendedCount,
+            thumbsUp: isThumbsUp,
+            thumbsDown: isThumbsDown
+        };
     }
 
     dispose() {

@@ -134,7 +134,7 @@
             </div>
         </div>
         <div id="debug-content" class="debug-content">
-            <div class="debug-column" data-column-id="global">
+            <div class="debug-column narrow" data-column-id="global">
                 <div class="debug-column-title">Global</div>
                 <div class="debug-column-body">
                 <div class="debug-section">
@@ -159,11 +159,12 @@
                         <small>0 = rectangle, 0.5 = pill, 1 = circle</small>
                     </div>
                 </div>
-                <div class="debug-section">
+                <div class="debug-section" id="tracking-section">
                     <h4>Tracking</h4>
                     <div class="checkbox-group">
                         <label><input type="checkbox" id="ctrl-camera-enabled" checked> Camera</label>
                     </div>
+                    <div id="camera-dependent-options">
                     <div class="checkbox-group">
                         <label><input type="checkbox" id="ctrl-face-enabled" checked> Face Tracking</label>
                     </div>
@@ -180,6 +181,7 @@
                     <div class="checkbox-group">
                         <label><input type="checkbox" id="ctrl-hand-visualizer" checked> Hand Visualizer</label>
                     </div>
+                    </div>
                 </div>
                 <div class="debug-section debug-info">
                     <h4>Info</h4>
@@ -189,7 +191,7 @@
                 </div>
                 </div>
             </div>
-            <div class="debug-column" data-column-id="color">
+            <div class="debug-column narrow" data-column-id="color">
                 <div class="debug-column-title">Palette</div>
                 <div class="debug-column-body">
                 <div class="debug-section">
@@ -378,8 +380,8 @@
                     <div class="slider-group range-dual">
                         <label>Speed Range: <span id="val-animationSpeed">0.12-0.50x</span></label>
                         <div class="range-dual-inputs">
-                            <input type="range" id="ctrl-animSpeedMin" class="range-min" min="0.05" max="1.2" step="0.01" value="0.12">
-                            <input type="range" id="ctrl-animSpeedMax" class="range-max" min="0.05" max="1.2" step="0.01" value="0.5">
+                            <input type="range" id="ctrl-animSpeedMin" class="range-min" min="0.05" max="1.2" step="0.01" value="0.25">
+                            <input type="range" id="ctrl-animSpeedMax" class="range-max" min="0.05" max="1.2" step="0.01" value="0.8">
                         </div>
                         <small>Sets the slowest and fastest evolution speeds</small>
                     </div>
@@ -776,7 +778,7 @@
                         <label class="checkbox-inline"><input type="checkbox" id="ctrl-mic-enabled" checked>On</label>
                         <div class="audio-group-volume">
                             <label>Vol <span id="val-micVolume">0.15</span></label>
-                            <input type="range" id="ctrl-micVolume" min="0" max="1" step="0.02" value="0.15">
+                            <input type="range" id="ctrl-micVolume" min="0" max="1" step="0.02" value="0.45">
                         </div>
                     </div>
                     <div class="audio-group-body">
@@ -798,15 +800,15 @@
                         </div>
                         <div class="slider-group">
                             <label>Delay Time: <span id="val-micDelayTime">2</span>s</label>
-                            <input type="range" id="ctrl-micDelayTime" min="1" max="10" step="0.1" value="2">
+                            <input type="range" id="ctrl-micDelayTime" min="1" max="10" step="0.1" value="4">
                         </div>
                         <div class="slider-group">
                             <label>Delay 2 Time: <span id="val-micDelayTime2">4</span>s</label>
-                            <input type="range" id="ctrl-micDelayTime2" min="1" max="10" step="0.1" value="4">
+                            <input type="range" id="ctrl-micDelayTime2" min="1" max="10" step="0.1" value="6">
                         </div>
                         <div class="slider-group">
                             <label>Delay Feedback: <span id="val-micDelayFeedback">0.6</span></label>
-                            <input type="range" id="ctrl-micDelayFeedback" min="0" max="0.95" step="0.02" value="0.6">
+                            <input type="range" id="ctrl-micDelayFeedback" min="0" max="0.95" step="0.02" value="0.75">
                         </div>
                         <div class="slider-group">
                             <label>Feedback Drift: <span id="val-micDelayFeedbackDrift">0.25</span></label>

@@ -118,9 +118,9 @@ class InnerReflectionApp {
         this.columnStateKey = 'innerReflection.columnState';
         this.previewStartTime = 0;
         this.previewHoldDuration = 6;
-        this.animSpeedMin = 0.12;
-        this.animSpeedMax = 0.5;
-        this.currentAnimSpeed = 0.2;
+        this.animSpeedMin = 0.25;
+        this.animSpeedMax = 0.8;
+        this.currentAnimSpeed = 0.4;
         
         // Face feature tracking state
         this.wasTalking = false;
@@ -2195,6 +2195,78 @@ class InnerReflectionApp {
                 this.saveColumnState(state);
             });
         });
+        
+        // Setup mobile tabs
+        this.setupMobileTabs();
+    }
+    
+    setupMobileTabs() {
+        const debugContent = document.querySelector('.debug-content');
+        if (!debugContent) return;
+        
+        // Check if already set up
+        if (document.querySelector('.mobile-tabs')) return;
+        
+        // Create mobile tab bar
+        const tabBar = document.createElement('div');
+        tabBar.className = 'mobile-tabs';
+        
+        // Get all columns
+        const columns = document.querySelectorAll('.debug-column');
+        const columnIds = [];
+        
+        columns.forEach((column, index) => {
+            const id = column.dataset.columnId;
+            const title = column.querySelector('.debug-column-title')?.textContent || `Tab ${index + 1}`;
+            columnIds.push(id);
+            
+            const tab = document.createElement('button');
+            tab.className = 'mobile-tab';
+            tab.dataset.columnId = id;
+            tab.textContent = title;
+            
+            tab.addEventListener('click', () => {
+                this.setActiveMobileTab(id);
+            });
+            
+            tabBar.appendChild(tab);
+        });
+        
+        // Insert tab bar at the start of debug-content
+        debugContent.insertBefore(tabBar, debugContent.firstChild);
+        
+        // Set first tab active by default
+        if (columnIds.length > 0) {
+            this.setActiveMobileTab(columnIds[0]);
+        }
+        
+        // Listen for resize to re-apply mobile state
+        window.addEventListener('resize', () => {
+            this.updateMobileTabVisibility();
+        });
+    }
+    
+    setActiveMobileTab(columnId) {
+        // Update tab active states
+        document.querySelectorAll('.mobile-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.columnId === columnId);
+        });
+        
+        // Update column visibility
+        document.querySelectorAll('.debug-column').forEach(column => {
+            column.classList.toggle('mobile-active', column.dataset.columnId === columnId);
+        });
+    }
+    
+    updateMobileTabVisibility() {
+        const isMobile = window.innerWidth <= 600;
+        const activeTab = document.querySelector('.mobile-tab.active');
+        
+        if (isMobile && activeTab) {
+            // Ensure one column is visible on mobile
+            const columnId = activeTab.dataset.columnId;
+            this.setActiveMobileTab(columnId);
+        }
     }
 
     setupAudioGroups() {
@@ -2292,11 +2364,19 @@ class InnerReflectionApp {
             
             // =========================================
             // PER-HAND FIST CONTROL (pitch + shape)
-            // Each hand controls a different sound
+            // Each hand controls a different sound independently
             // =========================================
             const fistThreshold = 0.55;
             const holdTimeRequired = 500;  // 0.5 seconds hold before activation
             const maxHands = Math.min(handState?.count || 0, 2);
+            
+            // Get which sounds are already grabbed by other hands
+            const grabbedSounds = new Set();
+            this.handFistControls.forEach((ctrl, idx) => {
+                if (ctrl.active && ctrl.targetSound) {
+                    grabbedSounds.add(ctrl.targetSound);
+                }
+            });
         
         for (let i = 0; i < 2; i++) {
             const control = this.handFistControls[i];
@@ -2315,10 +2395,27 @@ class InnerReflectionApp {
                     
                     // Check if hold time met
                     if (now - control.holdStart >= holdTimeRequired) {
-                        // Activate! Assign a sound to this hand
+                        // Activate! Assign a sound to this hand - avoid sounds already grabbed
                         control.active = true;
-                        control.soundIndex = i % this.controlableSounds.length;
-                        control.targetSound = this.controlableSounds[control.soundIndex];
+                        
+                        // Find an available sound not grabbed by another hand
+                        let assignedSound = null;
+                        for (let s = 0; s < this.controlableSounds.length; s++) {
+                            const soundName = this.controlableSounds[(i + s) % this.controlableSounds.length];
+                            if (!grabbedSounds.has(soundName)) {
+                                assignedSound = soundName;
+                                control.soundIndex = (i + s) % this.controlableSounds.length;
+                                break;
+                            }
+                        }
+                        
+                        // If all sounds are grabbed, cycle based on hand index
+                        if (!assignedSound) {
+                            control.soundIndex = i % this.controlableSounds.length;
+                            assignedSound = this.controlableSounds[control.soundIndex];
+                        }
+                        
+                        control.targetSound = assignedSound;
                         // Use current position as initial reference
                         control.initialY = pos.y;
                         control.initialX = pos.x;
@@ -2634,8 +2731,14 @@ class InnerReflectionApp {
 
     async toggleCamera(enabled) {
         const cameraToggle = document.getElementById('ctrl-camera-enabled');
+        const cameraDependentOptions = document.getElementById('camera-dependent-options');
         const cameraEnabled = Boolean(enabled);
         this.enabledInputs.camera = cameraEnabled;
+        
+        // Update dependent options visibility
+        if (cameraDependentOptions) {
+            cameraDependentOptions.classList.toggle('disabled', !cameraEnabled);
+        }
         
         if (!cameraEnabled) {
             this.faceTracker?.stop();
@@ -2654,6 +2757,9 @@ class InnerReflectionApp {
             this.enabledInputs.camera = false;
             if (cameraToggle) {
                 cameraToggle.checked = false;
+            }
+            if (cameraDependentOptions) {
+                cameraDependentOptions.classList.add('disabled');
             }
             this.setFaceOverlayVisible(false);
             this.setHandOverlayVisible(false);
@@ -2776,8 +2882,21 @@ class InnerReflectionApp {
         const checkbox = document.getElementById(checkboxId);
         if (checkbox) {
             checkbox.addEventListener('change', (e) => {
-                this.audioEngine?.toggleMicEffects(e.target.checked);
+                const enabled = e.target.checked;
+                this.audioEngine?.toggleMicEffects(enabled);
+                
+                // Update mic processing group visibility
+                const micGroup = document.querySelector('.audio-group[data-audio-group="mic-processing"]');
+                if (micGroup) {
+                    micGroup.classList.toggle('group-disabled', !enabled);
+                }
             });
+            
+            // Initialize state
+            const micGroup = document.querySelector('.audio-group[data-audio-group="mic-processing"]');
+            if (micGroup) {
+                micGroup.classList.toggle('group-disabled', !checkbox.checked);
+            }
         }
     }
     
@@ -2971,63 +3090,61 @@ class InnerReflectionApp {
             colorHue4: 0.35,
             colorSaturation: 0.7,
             colorBrightness: 0.55,
-            displacementStrength: 0.35,
-            displacementRadius: 0.6,
-            displacementRings: 0.4,
+            displacementStrength: 0.5,
+            displacementRadius: 0.7,
+            displacementRings: 0.5,
             displacementX: 0.5,
             displacementY: 0.5,
-            displacementChromatic: 0.25,
-            displacementWobble: 0.15,
-            rippleOrigin2Strength: 0.2,
-            rippleOrigin3Strength: 0.15,
+            displacementChromatic: 0.35,
+            displacementWobble: 0.2,
+            rippleOrigin2Strength: 0.25,
+            rippleOrigin3Strength: 0.18,
             morphProgress: 0,
             morphType: 0.1,
             shapeType: 0.0,
-            waveDelay: 0.45,
-            waveAmplitude: 0.2,
-            waveSpeed: 0.4,
-            edgeSharpness: 0.2,
-            minRadius: 0.08,
+            waveDelay: 0.5,
+            waveAmplitude: 0.3,
+            waveSpeed: 0.5,
+            edgeSharpness: 0.25,
+            minRadius: 0.06,
             shapeRotation: 0,
-            rotationSpeed: 0.1,
+            rotationSpeed: 0.15,
             foldAmount: 0.4,
             invertAmount: 0.2,
-            secondaryWave: 0.3,
-            tertiaryWave: 0.1,
-            blur: 0.2,
-            glow: 0.25,
-            vignette: 0.2,
+            secondaryWave: 0.35,
+            tertiaryWave: 0.15,
+            blur: 0.15,
+            glow: 0.3,
+            vignette: 0.15,
             brightnessEvolution: 0.5
         };
         
         const baseManual = {
-            ringDelay: 0.35,
-            ringOverlayStrength: 0.4,
-            ringOverlayWidth: 0.35,
-            parallelStrength: 0.0,      // No parallel lines by default
+            ringDelay: 0.4,
+            ringOverlayStrength: 0.5,
+            ringOverlayWidth: 0.4,
+            parallelStrength: 0.0,
             parallelZoom: 0.42,
             parallelZoomDrift: 0.15,
             parallelSpin: 0.15,
             parallelThickness: 0.28,
-            parallelPresence: 0.0,      // No parallel presence by default
+            parallelPresence: 0.0,
             blobCount: 8,
             blobSpread: 0.75,
             blobScale: 0.95,
-            blobMotion: 0.4,
+            blobMotion: 0.5,
             blobBlur: 0.75,
             blobSmear: 0.6,
             blobLighten: 0.25,
             blobInvert: 0.1,
             blobFade: 0.7,
-            blobWarp: 0.25,
+            blobWarp: 0.3,
             blobOffsetX: 0,
             blobOffsetY: 0
         };
         
         const presets = {
-            // === REFERENCE IMAGE INSPIRED PRESETS ===
-            
-            // Glowing pill/capsule on dark background (ref image 1)
+            // === DRAMATICALLY DIFFERENT PRESETS ===
             glowingPill: {
                 state: {
                     ...baseState,
@@ -3342,330 +3459,360 @@ class InnerReflectionApp {
                 vignetteShape: 0.5
             },
             
-            // === ORIGINAL PRESETS (updated with reduced parallel lines) ===
+            // === ORIGINAL PRESETS (dramatically different) ===
             
             calm: {
                 state: {
                     ...baseState,
-                    colorHue1: 0.55,
-                    colorHue2: 0.48,
-                    colorHue3: 0.75,
-                    colorHue4: 0.3,
-                    colorSaturation: 0.5,
-                    colorBrightness: 0.52,
-                    displacementStrength: 0.28,
-                    displacementRings: 0.3,
-                    displacementChromatic: 0.18,
-                    displacementWobble: 0.08,
-                    blur: 0.25,
-                    glow: 0.2,
-                    vignette: 0.18,
-                    brightnessEvolution: 0.35
-                },
-                manual: {
-                    ...baseManual,
-                    ringOverlayStrength: 0.25,
-                    ringOverlayWidth: 0.3,
-                    parallelStrength: 0.0,
-                    parallelPresence: 0.0,
-                    blobCount: 8,
-                    blobSpread: 0.65,
-                    blobScale: 0.8,
-                    blobMotion: 0.35,
-                    blobBlur: 0.9,
-                    blobLighten: 0.2
-                },
-                vignetteShape: 0.45
-            },
-            softBlobs: {
-                state: {
-                    ...baseState,
-                    colorHue1: 0.5,
-                    colorHue2: 0.85,
-                    colorHue3: 0.2,
-                    colorHue4: 0.62,
-                    colorSaturation: 0.75,
-                    colorBrightness: 0.62,
-                    displacementStrength: 0.18,
-                    displacementRadius: 0.4,
-                    displacementRings: 0.18,
-                    displacementChromatic: 0.25,
-                    displacementWobble: 0.35,
-                    blur: 0.65,
-                    glow: 0.45,
-                    vignette: 0.15,
-                    brightnessEvolution: 0.6
+                    colorHue1: 0.55,      // Cyan-blue
+                    colorHue2: 0.48,      // Blue-cyan
+                    colorHue3: 0.62,      // Blue
+                    colorHue4: 0.42,      // Cyan
+                    colorSaturation: 0.35, // Very desaturated
+                    colorBrightness: 0.6,
+                    displacementStrength: 0.22,  // Very gentle
+                    displacementRadius: 0.5,
+                    displacementRings: 0.2,      // Few rings
+                    displacementChromatic: 0.08, // Minimal chromatic
+                    displacementWobble: 0.03,    // Almost no wobble
+                    waveDelay: 0.3,
+                    waveAmplitude: 0.08,         // Very subtle waves
+                    waveSpeed: 0.2,              // Slow
+                    edgeSharpness: 0.6,
+                    rotationSpeed: 0.02,         // Very slow rotation
+                    blur: 0.5,                   // Heavy blur
+                    glow: 0.15,
+                    brightnessEvolution: 0.2     // Stable
                 },
                 manual: {
                     ...baseManual,
                     ringOverlayStrength: 0.15,
-                    ringOverlayWidth: 0.55,
-                    parallelStrength: 0.0,
-                    parallelPresence: 0.0,
-                    blobCount: 12,
-                    blobScale: 1.15,
+                    ringOverlayWidth: 0.5,
+                    ringDelay: 0.2,
+                    blobCount: 5,
+                    blobSpread: 0.4,
+                    blobScale: 0.6,
+                    blobMotion: 0.15,
                     blobBlur: 1.0,
-                    blobSmear: 0.85,
-                    blobMotion: 0.65,
-                    blobWarp: 0.45,
-                    blobLighten: 0.35
+                    blobSmear: 0.9,
+                    blobLighten: 0.1
                 },
                 vignetteShape: 0.6
+            },
+            softBlobs: {
+                state: {
+                    ...baseState,
+                    colorHue1: 0.85,      // Pink-magenta
+                    colorHue2: 0.75,      // Purple
+                    colorHue3: 0.45,      // Cyan
+                    colorHue4: 0.95,      // Red-pink
+                    colorSaturation: 0.6,
+                    colorBrightness: 0.65,
+                    displacementStrength: 0.12,  // Very weak rings
+                    displacementRadius: 0.35,    // Small area
+                    displacementRings: 0.1,      // Minimal rings
+                    displacementChromatic: 0.15,
+                    displacementWobble: 0.5,     // High wobble for organic feel
+                    waveDelay: 0.8,
+                    waveAmplitude: 0.35,
+                    waveSpeed: 0.35,
+                    edgeSharpness: 0.95,         // Very soft edges
+                    rotationSpeed: 0.08,
+                    blur: 0.8,                   // Very blurry
+                    glow: 0.6,                   // Strong glow
+                    brightnessEvolution: 0.7
+                },
+                manual: {
+                    ...baseManual,
+                    ringOverlayStrength: 0.05,
+                    blobCount: 16,               // Many blobs
+                    blobSpread: 1.0,
+                    blobScale: 1.4,              // Large blobs
+                    blobBlur: 1.0,
+                    blobSmear: 0.95,
+                    blobMotion: 0.8,
+                    blobWarp: 0.6,
+                    blobLighten: 0.5,
+                    blobInvert: 0.3
+                },
+                vignetteShape: 0.7
             },
             singleRing: {
                 state: {
                     ...baseState,
-                    colorHue1: 0.9,
-                    colorHue2: 0.85,
-                    colorHue3: 0.1,
-                    colorHue4: 0.5,
-                    colorSaturation: 0.8,
-                    colorBrightness: 0.6,
-                    displacementStrength: 0.7,
-                    displacementRadius: 0.7,
-                    displacementRings: 0.1,
-                    displacementChromatic: 0.45,
-                    displacementWobble: 0.05,
-                    waveDelay: 0.6,
-                    waveAmplitude: 0.25,
-                    edgeSharpness: 0.15,
-                    blur: 0.1,
-                    glow: 0.25,
-                    vignette: 0.45
+                    colorHue1: 0.08,      // Orange
+                    colorHue2: 0.95,      // Red
+                    colorHue3: 0.12,      // Yellow-orange
+                    colorHue4: 0.02,      // Deep red
+                    colorSaturation: 0.95,
+                    colorBrightness: 0.55,
+                    displacementStrength: 0.95,  // Very strong
+                    displacementRadius: 0.6,
+                    displacementRings: 0.08,     // Almost single ring
+                    displacementChromatic: 0.65,
+                    displacementWobble: 0.02,    // Clean edges
+                    waveDelay: 0.15,
+                    waveAmplitude: 0.5,          // Strong wave
+                    waveSpeed: 0.6,
+                    edgeSharpness: 0.05,         // Very sharp
+                    minRadius: 0.15,             // Hollow center
+                    rotationSpeed: 0.25,
+                    blur: 0.02,                  // Almost no blur
+                    glow: 0.45,
+                    brightnessEvolution: 0.4
                 },
                 manual: {
                     ...baseManual,
-                    ringDelay: 0.45,
-                    ringOverlayStrength: 0.6,
-                    ringOverlayWidth: 0.2,
-                    parallelStrength: 0.0,
-                    parallelPresence: 0.0,
-                    blobCount: 6,
-                    blobScale: 0.7,
-                    blobBlur: 0.4,
-                    blobLighten: 0.15
+                    ringDelay: 0.6,
+                    ringOverlayStrength: 0.85,   // Strong overlay
+                    ringOverlayWidth: 0.15,
+                    blobCount: 3,
+                    blobScale: 0.5,
+                    blobBlur: 0.3,
+                    blobMotion: 0.2,
+                    blobLighten: 0.0
                 },
-                vignetteShape: 0.75
+                vignetteShape: 0.85
             },
             multiRings: {
                 state: {
                     ...baseState,
-                    colorHue1: 0.55,
-                    colorHue2: 0.1,
-                    colorHue3: 0.9,
-                    colorHue4: 0.32,
-                    colorSaturation: 0.9,
-                    colorBrightness: 0.55,
-                    displacementStrength: 0.55,
-                    displacementRadius: 0.9,
-                    displacementRings: 0.65,
-                    displacementChromatic: 0.55,
-                    displacementWobble: 0.12,
-                    waveDelay: 0.7,
-                    waveAmplitude: 0.3,
-                    blur: 0.18,
-                    glow: 0.32,
-                    vignette: 0.28
+                    colorHue1: 0.45,      // Cyan
+                    colorHue2: 0.65,      // Blue
+                    colorHue3: 0.85,      // Purple
+                    colorHue4: 0.25,      // Green
+                    colorSaturation: 0.85,
+                    colorBrightness: 0.58,
+                    displacementStrength: 0.7,
+                    displacementRadius: 1.0,     // Full screen
+                    displacementRings: 0.95,     // Maximum rings
+                    displacementChromatic: 0.7,
+                    displacementWobble: 0.15,
+                    waveDelay: 0.85,             // Long delay between rings
+                    waveAmplitude: 0.45,
+                    waveSpeed: 0.7,              // Fast
+                    edgeSharpness: 0.12,
+                    minRadius: 0.02,
+                    rotationSpeed: 0.3,
+                    blur: 0.08,
+                    glow: 0.35
                 },
                 manual: {
                     ...baseManual,
-                    ringDelay: 0.5,
-                    ringOverlayStrength: 0.45,
-                    ringOverlayWidth: 0.35,
-                    parallelStrength: 0.0,
-                    parallelPresence: 0.0,
-                    blobCount: 9,
-                    blobSpread: 0.8
+                    ringDelay: 0.7,
+                    ringOverlayStrength: 0.6,
+                    ringOverlayWidth: 0.25,
+                    blobCount: 12,
+                    blobSpread: 0.9,
+                    blobMotion: 0.6
                 },
-                vignetteShape: 0.5
+                vignetteShape: 0.4
             },
             chromatic: {
                 state: {
                     ...baseState,
-                    colorHue1: 0.0,
-                    colorHue2: 0.33,
-                    colorHue3: 0.66,
-                    colorHue4: 0.92,
-                    colorSaturation: 1.0,
-                    colorBrightness: 0.6,
-                    displacementStrength: 0.75,
-                    displacementRadius: 1.0,
-                    displacementRings: 0.85,
-                    displacementChromatic: 0.9,
-                    displacementWobble: 0.12,
-                    waveDelay: 0.65,
-                    waveAmplitude: 0.28,
-                    blur: 0.1,
-                    glow: 0.4,
-                    vignette: 0.2
+                    colorHue1: 0.0,       // Red
+                    colorHue2: 0.25,      // Yellow-green
+                    colorHue3: 0.5,       // Cyan
+                    colorHue4: 0.75,      // Purple
+                    colorSaturation: 1.0, // Full saturation
+                    colorBrightness: 0.65,
+                    displacementStrength: 0.85,
+                    displacementRadius: 0.9,
+                    displacementRings: 0.75,
+                    displacementChromatic: 1.0,  // Maximum chromatic
+                    displacementWobble: 0.2,
+                    waveDelay: 0.55,
+                    waveAmplitude: 0.4,
+                    waveSpeed: 0.55,
+                    edgeSharpness: 0.08,
+                    rotationSpeed: 0.35,
+                    blur: 0.05,
+                    glow: 0.5,
+                    brightnessEvolution: 0.65
                 },
                 manual: {
                     ...baseManual,
-                    ringOverlayStrength: 0.4,
-                    ringOverlayWidth: 0.25,
-                    parallelStrength: 0.0,
-                    parallelPresence: 0.0,
-                    blobCount: 10,
-                    blobLighten: 0.35,
-                    blobInvert: 0.2
+                    ringOverlayStrength: 0.55,
+                    ringOverlayWidth: 0.2,
+                    blobCount: 14,
+                    blobLighten: 0.4,
+                    blobInvert: 0.25,
+                    blobMotion: 0.5
                 },
-                vignetteShape: 0.55
+                vignetteShape: 0.5
             },
             angular: {
                 state: {
                     ...baseState,
-                    colorHue1: 0.95,
-                    colorHue2: 0.45,
-                    colorHue3: 0.2,
-                    colorHue4: 0.6,
-                    colorSaturation: 0.85,
-                    colorBrightness: 0.5,
-                    displacementStrength: 0.5,
-                    displacementRadius: 0.8,
-                    displacementRings: 0.5,
-                    displacementChromatic: 0.28,
-                    displacementWobble: 0.05,
-                    morphProgress: 0.8,
-                    morphType: 0.6,
-                    shapeType: 0.35,
-                    edgeSharpness: 0.12,
-                    blur: 0.05,
-                    glow: 0.3,
-                    vignette: 0.35
+                    colorHue1: 0.12,      // Yellow
+                    colorHue2: 0.92,      // Magenta
+                    colorHue3: 0.35,      // Green
+                    colorHue4: 0.65,      // Blue
+                    colorSaturation: 0.9,
+                    colorBrightness: 0.52,
+                    displacementStrength: 0.65,
+                    displacementRadius: 0.75,
+                    displacementRings: 0.45,
+                    displacementChromatic: 0.45,
+                    displacementWobble: 0.02,    // Very clean
+                    morphProgress: 0.85,
+                    morphType: 0.75,
+                    shapeType: 0.6,              // Angular shapes
+                    waveDelay: 0.4,
+                    waveAmplitude: 0.2,
+                    waveSpeed: 0.4,
+                    edgeSharpness: 0.02,         // Very sharp
+                    rotationSpeed: 0.45,         // Fast rotation
+                    blur: 0.0,                   // No blur
+                    glow: 0.25,
+                    brightnessEvolution: 0.55
                 },
                 manual: {
                     ...baseManual,
-                    ringOverlayStrength: 0.35,
-                    parallelStrength: 0.0,
-                    parallelPresence: 0.0,
-                    parallelZoom: 0.6,
-                    parallelSpin: 0.55,
-                    blobCount: 7,
-                    blobBlur: 0.5
+                    ringOverlayStrength: 0.5,
+                    ringDelay: 0.3,
+                    blobCount: 5,
+                    blobBlur: 0.2,
+                    blobMotion: 0.25
                 },
-                vignetteShape: 0.25
+                vignetteShape: 0.3
             },
             minimal: {
                 state: {
                     ...baseState,
-                    colorHue1: 0.6,
-                    colorHue2: 0.58,
-                    colorHue3: 0.62,
-                    colorHue4: 0.55,
-                    colorSaturation: 0.3,
-                    colorBrightness: 0.7,
-                    displacementStrength: 0.18,
-                    displacementRadius: 0.5,
-                    displacementRings: 0.25,
-                    displacementChromatic: 0.08,
-                    displacementWobble: 0.03,
-                    blur: 0.35,
-                    glow: 0.08,
-                    vignette: 0.45,
-                    brightnessEvolution: 0.25
+                    colorHue1: 0.0,       // Greyscale tint
+                    colorHue2: 0.0,
+                    colorHue3: 0.0,
+                    colorHue4: 0.0,
+                    colorSaturation: 0.0, // No color
+                    colorBrightness: 0.75,
+                    displacementStrength: 0.15,
+                    displacementRadius: 0.4,
+                    displacementRings: 0.15,
+                    displacementChromatic: 0.0,  // No chromatic
+                    displacementWobble: 0.0,
+                    waveDelay: 0.2,
+                    waveAmplitude: 0.05,
+                    waveSpeed: 0.15,
+                    edgeSharpness: 0.5,
+                    rotationSpeed: 0.0,          // No rotation
+                    blur: 0.3,
+                    glow: 0.05,
+                    brightnessEvolution: 0.1
                 },
                 manual: {
                     ...baseManual,
-                    ringOverlayStrength: 0.2,
-                    parallelStrength: 0.0,
-                    parallelPresence: 0.0,
-                    blobCount: 6,
-                    blobLighten: 0.1,
-                    blobInvert: 0.05
+                    ringOverlayStrength: 0.1,
+                    blobCount: 3,
+                    blobBlur: 0.8,
+                    blobLighten: 0.0,
+                    blobInvert: 0.0,
+                    blobMotion: 0.1
                 },
-                vignetteShape: 0.8
+                vignetteShape: 0.9
             },
             halo: {
                 state: {
                     ...baseState,
-                    colorHue1: 0.62,
-                    colorHue2: 0.12,
-                    colorHue3: 0.78,
-                    colorHue4: 0.28,
+                    colorHue1: 0.15,      // Gold/yellow
+                    colorHue2: 0.08,      // Orange
+                    colorHue3: 0.02,      // Red
+                    colorHue4: 0.18,      // Yellow
                     colorSaturation: 0.75,
-                    colorBrightness: 0.58,
-                    displacementStrength: 0.55,
-                    displacementRadius: 0.85,
-                    displacementRings: 0.45,
-                    waveDelay: 0.7,
-                    waveAmplitude: 0.25,
-                    blur: 0.18,
-                    glow: 0.5,
-                    vignette: 0.25
+                    colorBrightness: 0.7,
+                    displacementStrength: 0.75,
+                    displacementRadius: 0.95,
+                    displacementRings: 0.35,
+                    displacementChromatic: 0.5,
+                    displacementWobble: 0.08,
+                    waveDelay: 0.75,
+                    waveAmplitude: 0.4,
+                    waveSpeed: 0.45,
+                    edgeSharpness: 0.15,
+                    minRadius: 0.2,              // Hollow center
+                    rotationSpeed: 0.12,
+                    blur: 0.25,
+                    glow: 0.85,                  // Strong glow
+                    brightnessEvolution: 0.55
                 },
                 manual: {
                     ...baseManual,
-                    ringOverlayStrength: 0.7,
-                    ringOverlayWidth: 0.25,
-                    ringDelay: 0.55,
-                    parallelStrength: 0.0,
-                    parallelPresence: 0.0,
-                    blobCount: 8,
-                    blobLighten: 0.35
+                    ringOverlayStrength: 0.8,
+                    ringOverlayWidth: 0.2,
+                    ringDelay: 0.65,
+                    blobCount: 10,
+                    blobLighten: 0.6,
+                    blobBlur: 0.95
                 },
-                vignetteShape: 0.65
+                vignetteShape: 0.75
             },
             liquid: {
                 state: {
                     ...baseState,
-                    colorHue1: 0.48,
-                    colorHue2: 0.9,
-                    colorHue3: 0.18,
-                    colorHue4: 0.7,
-                    colorSaturation: 0.8,
+                    colorHue1: 0.55,      // Cyan
+                    colorHue2: 0.45,      // Teal
+                    colorHue3: 0.65,      // Blue
+                    colorHue4: 0.35,      // Green
+                    colorSaturation: 0.7,
                     colorBrightness: 0.6,
-                    displacementStrength: 0.32,
-                    displacementRadius: 0.7,
-                    displacementRings: 0.35,
-                    displacementWobble: 0.25,
-                    shapeType: 0.1,
-                    waveDelay: 0.5,
-                    waveAmplitude: 0.22,
-                    blur: 0.3,
-                    glow: 0.28,
-                    vignette: 0.18
+                    displacementStrength: 0.4,
+                    displacementRadius: 0.65,
+                    displacementRings: 0.3,
+                    displacementChromatic: 0.35,
+                    displacementWobble: 0.6,     // High wobble
+                    shapeType: 0.15,
+                    waveDelay: 0.6,
+                    waveAmplitude: 0.5,          // Strong waves
+                    waveSpeed: 0.65,
+                    edgeSharpness: 0.8,          // Soft
+                    rotationSpeed: 0.18,
+                    blur: 0.45,
+                    glow: 0.35,
+                    brightnessEvolution: 0.7
                 },
                 manual: {
                     ...baseManual,
-                    ringOverlayStrength: 0.25,
-                    parallelStrength: 0.0,
-                    parallelPresence: 0.0,
-                    blobCount: 12,
-                    blobMotion: 0.8,
-                    blobSmear: 0.95,
-                    blobBlur: 0.9,
-                    blobWarp: 0.5,
-                    blobLighten: 0.4,
-                    blobInvert: 0.25
+                    ringOverlayStrength: 0.2,
+                    blobCount: 15,
+                    blobMotion: 0.95,
+                    blobSmear: 1.0,
+                    blobBlur: 0.95,
+                    blobWarp: 0.7,
+                    blobLighten: 0.45,
+                    blobInvert: 0.3
                 },
                 vignetteShape: 0.55
             },
             prism: {
                 state: {
                     ...baseState,
-                    colorHue1: 0.05,
-                    colorHue2: 0.35,
-                    colorHue3: 0.62,
-                    colorHue4: 0.9,
-                    colorSaturation: 0.95,
-                    colorBrightness: 0.58,
-                    displacementStrength: 0.62,
-                    displacementRadius: 0.9,
-                    displacementRings: 0.55,
-                    displacementChromatic: 0.75,
-                    shapeType: 0.55,
-                    morphProgress: 0.5,
-                    morphType: 0.75,
-                    waveDelay: 0.55,
-                    waveAmplitude: 0.28,
-                    blur: 0.1,
-                    glow: 0.35,
-                    vignette: 0.2
+                    colorHue1: 0.0,       // Red
+                    colorHue2: 0.15,      // Orange-yellow
+                    colorHue3: 0.33,      // Green
+                    colorHue4: 0.66,      // Blue
+                    colorSaturation: 1.0,
+                    colorBrightness: 0.62,
+                    displacementStrength: 0.8,
+                    displacementRadius: 0.85,
+                    displacementRings: 0.6,
+                    displacementChromatic: 0.95, // Very high
+                    shapeType: 0.7,
+                    morphProgress: 0.6,
+                    morphType: 0.85,
+                    waveDelay: 0.5,
+                    waveAmplitude: 0.35,
+                    waveSpeed: 0.5,
+                    edgeSharpness: 0.1,
+                    rotationSpeed: 0.28,
+                    blur: 0.08,
+                    glow: 0.45,
+                    brightnessEvolution: 0.6
                 },
                 manual: {
                     ...baseManual,
-                    ringOverlayStrength: 0.4,
-                    ringOverlayWidth: 0.3,
+                    ringOverlayStrength: 0.55,
+                    ringOverlayWidth: 0.25,
                     parallelStrength: 0.0,
                     parallelPresence: 0.0,
                     parallelZoom: 0.7,
@@ -3679,62 +3826,74 @@ class InnerReflectionApp {
             nocturne: {
                 state: {
                     ...baseState,
-                    colorHue1: 0.62,
-                    colorHue2: 0.7,
-                    colorHue3: 0.05,
-                    colorHue4: 0.25,
-                    colorSaturation: 0.4,
-                    colorBrightness: 0.45,
-                    displacementStrength: 0.3,
-                    displacementRadius: 0.65,
-                    displacementRings: 0.4,
-                    displacementChromatic: 0.15,
-                    waveDelay: 0.5,
-                    waveAmplitude: 0.18,
-                    blur: 0.4,
-                    glow: 0.18,
-                    vignette: 0.6,
-                    brightnessEvolution: 0.2
+                    colorHue1: 0.72,      // Deep purple
+                    colorHue2: 0.68,      // Blue-purple
+                    colorHue3: 0.78,      // Violet
+                    colorHue4: 0.65,      // Blue
+                    colorSaturation: 0.25, // Very desaturated
+                    colorBrightness: 0.35, // Dark
+                    displacementStrength: 0.35,
+                    displacementRadius: 0.7,
+                    displacementRings: 0.5,
+                    displacementChromatic: 0.12,
+                    displacementWobble: 0.1,
+                    waveDelay: 0.65,
+                    waveAmplitude: 0.2,
+                    waveSpeed: 0.25,       // Slow
+                    edgeSharpness: 0.4,
+                    rotationSpeed: 0.05,   // Very slow
+                    blur: 0.55,
+                    glow: 0.12,            // Minimal glow
+                    brightnessEvolution: 0.15
                 },
                 manual: {
                     ...baseManual,
-                    ringOverlayStrength: 0.3,
-                    parallelStrength: 0.0,
-                    parallelPresence: 0.0,
-                    blobCount: 7,
-                    blobBlur: 0.8,
-                    blobLighten: 0.15
+                    ringOverlayStrength: 0.25,
+                    blobCount: 6,
+                    blobBlur: 0.9,
+                    blobLighten: 0.08,
+                    blobMotion: 0.2,
+                    blobInvert: 0.15
                 },
-                vignetteShape: 0.7
+                vignetteShape: 0.8
             },
             interference: {
                 state: {
                     ...baseState,
-                    colorHue1: 0.52,
-                    colorHue2: 0.2,
-                    colorHue3: 0.78,
-                    colorHue4: 0.38,
-                    colorSaturation: 0.85,
-                    colorBrightness: 0.55,
-                    displacementStrength: 0.48,
-                    displacementRadius: 0.8,
-                    displacementRings: 0.5,
-                    shapeType: 0.8,
-                    waveDelay: 0.6,
-                    waveAmplitude: 0.25,
+                    colorHue1: 0.45,      // Cyan
+                    colorHue2: 0.92,      // Magenta
+                    colorHue3: 0.25,      // Green
+                    colorHue4: 0.08,      // Orange
+                    colorSaturation: 0.95,
+                    colorBrightness: 0.58,
+                    displacementStrength: 0.6,
+                    displacementRadius: 0.85,
+                    displacementRings: 0.7,
+                    displacementChromatic: 0.65,
+                    displacementWobble: 0.25,
+                    rippleOrigin2Strength: 0.65, // Strong second ripple
+                    rippleOrigin3Strength: 0.5,  // Strong third ripple
+                    shapeType: 0.4,
+                    waveDelay: 0.45,
+                    waveAmplitude: 0.4,
+                    waveSpeed: 0.6,
+                    edgeSharpness: 0.15,
+                    rotationSpeed: 0.22,
                     blur: 0.12,
-                    glow: 0.3
+                    glow: 0.4,
+                    brightnessEvolution: 0.65
                 },
                 manual: {
                     ...baseManual,
-                    parallelStrength: 0.85,
-                    parallelPresence: 0.85,
-                    parallelZoom: 0.7,
-                    parallelZoomDrift: 0.6,
-                    parallelSpin: 0.7,
-                    parallelThickness: 0.6,
-                    ringOverlayStrength: 0.25,
-                    blobCount: 8
+                    parallelStrength: 0.75,
+                    parallelPresence: 0.8,
+                    parallelZoom: 0.65,
+                    parallelZoomDrift: 0.5,
+                    parallelSpin: 0.65,
+                    parallelThickness: 0.55,
+                    ringOverlayStrength: 0.35,
+                    blobCount: 11,
+                    blobMotion: 0.55
                 },
                 vignetteShape: 0.35
             }

@@ -366,19 +366,19 @@ class AudioEngine {
             type: 'sine',
             frequency: 32  // Very low
         });
-        const subFilter = new Tone.Filter({ type: 'lowpass', frequency: 60 });
-        const subGain = new Tone.Gain(Tone.dbToGain(-22));
+        const subFilter = new Tone.Filter({ type: 'lowpass', frequency: 50 });
+        const subGain = new Tone.Gain(Tone.dbToGain(-28));  // Reduced
         this.ambientLayers.subBass.connect(subFilter);
         subFilter.connect(subGain);
         subGain.connect(this.masterFilter);
         
         // Breath layer - slow filtered noise like breathing
         this.ambientLayers.breath = new Tone.Noise('pink');
-        const breathFilter = new Tone.Filter({ type: 'bandpass', frequency: 400, Q: 2 });
-        const breathLFO = new Tone.LFO({ frequency: 0.08, min: 200, max: 600 }).start();
+        const breathFilter = new Tone.Filter({ type: 'bandpass', frequency: 350, Q: 1.5 });
+        const breathLFO = new Tone.LFO({ frequency: 0.06, min: 200, max: 500 }).start();
         breathLFO.connect(breathFilter.frequency);
-        const breathGain = new Tone.Gain(Tone.dbToGain(-28));
-        const breathEnvLFO = new Tone.LFO({ frequency: 0.05, min: 0, max: 0.4 }).start();
+        const breathGain = new Tone.Gain(Tone.dbToGain(-32));  // Reduced
+        const breathEnvLFO = new Tone.LFO({ frequency: 0.04, min: 0, max: 0.35 }).start();
         this.ambientLayers.breath.connect(breathFilter);
         breathFilter.connect(breathGain);
         breathEnvLFO.connect(breathGain.gain);
@@ -387,15 +387,57 @@ class AudioEngine {
         // Shimmer pad - high harmonics that slowly evolve
         this.ambientLayers.shimmerPad = new Tone.PolySynth(Tone.Synth, {
             oscillator: { type: 'sine' },
-            envelope: { attack: 4, decay: 2, sustain: 0.8, release: 8 }
+            envelope: { attack: 6, decay: 3, sustain: 0.7, release: 10 }
         });
-        const shimmerFilter = new Tone.Filter({ type: 'highpass', frequency: 2000 });
-        const shimmerChorus = new Tone.Chorus({ frequency: 0.3, depth: 0.8, wet: 0.6 }).start();
-        const shimmerGain = new Tone.Gain(Tone.dbToGain(-24));
+        const shimmerFilter = new Tone.Filter({ type: 'highpass', frequency: 2500 });
+        const shimmerChorus = new Tone.Chorus({ frequency: 0.2, depth: 0.9, wet: 0.7 }).start();
+        const shimmerGain = new Tone.Gain(Tone.dbToGain(-28));  // Reduced
         this.ambientLayers.shimmerPad.connect(shimmerFilter);
         shimmerFilter.connect(shimmerChorus);
         shimmerChorus.connect(shimmerGain);
         shimmerGain.connect(this.effects.reverb);
+        
+        // === NEW: Glitter/sparkle texture - gentle high frequency sparkles ===
+        this.ambientLayers.glitter = new Tone.PolySynth(Tone.Synth, {
+            oscillator: { type: 'sine' },
+            envelope: { attack: 0.01, decay: 0.8, sustain: 0, release: 1.5 }
+        });
+        const glitterFilter = new Tone.Filter({ type: 'highpass', frequency: 3000, Q: 0.5 });
+        const glitterDelay = new Tone.PingPongDelay({ delayTime: 0.25, feedback: 0.4, wet: 0.5 });
+        const glitterReverb = new Tone.Reverb({ decay: 4, wet: 0.8 });
+        const glitterGain = new Tone.Gain(Tone.dbToGain(-34));
+        this.ambientLayers.glitter.connect(glitterFilter);
+        glitterFilter.connect(glitterDelay);
+        glitterDelay.connect(glitterReverb);
+        glitterReverb.connect(glitterGain);
+        glitterGain.connect(this.masterFilter);
+        
+        // === NEW: Melodic pad - slow evolving chords ===
+        this.ambientLayers.melodicPad = new Tone.PolySynth(Tone.Synth, {
+            oscillator: { type: 'triangle' },
+            envelope: { attack: 8, decay: 4, sustain: 0.6, release: 12 }
+        });
+        const melodicFilter = new Tone.Filter({ type: 'lowpass', frequency: 1200, Q: 0.7 });
+        const melodicChorus = new Tone.Chorus({ frequency: 0.15, depth: 0.5, wet: 0.4 }).start();
+        const melodicReverb = new Tone.Reverb({ decay: 6, wet: 0.7 });
+        const melodicGain = new Tone.Gain(Tone.dbToGain(-26));
+        this.ambientLayers.melodicPad.connect(melodicFilter);
+        melodicFilter.connect(melodicChorus);
+        melodicChorus.connect(melodicReverb);
+        melodicReverb.connect(melodicGain);
+        melodicGain.connect(this.masterFilter);
+        
+        // === NEW: Texture layer - gentle granular-like filtered noise ===
+        this.ambientLayers.texture = new Tone.Noise('white');
+        const textureFilter = new Tone.Filter({ type: 'bandpass', frequency: 800, Q: 8 });
+        const textureFilterLFO = new Tone.LFO({ frequency: 0.03, min: 400, max: 2000 }).start();
+        textureFilterLFO.connect(textureFilter.frequency);
+        const textureGain = new Tone.Gain(Tone.dbToGain(-42));
+        const textureEnvLFO = new Tone.LFO({ frequency: 0.02, min: 0, max: 0.2 }).start();
+        this.ambientLayers.texture.connect(textureFilter);
+        textureFilter.connect(textureGain);
+        textureEnvLFO.connect(textureGain.gain);
+        textureGain.connect(this.effects.reverb);
         
         // Store references for control
         this.ambientLayers.subFilter = subFilter;
@@ -404,8 +446,18 @@ class AudioEngine {
         this.ambientLayers.breathGain = breathGain;
         this.ambientLayers.shimmerFilter = shimmerFilter;
         this.ambientLayers.shimmerGain = shimmerGain;
+        this.ambientLayers.glitterGain = glitterGain;
+        this.ambientLayers.glitterDelay = glitterDelay;
+        this.ambientLayers.melodicFilter = melodicFilter;
+        this.ambientLayers.melodicGain = melodicGain;
+        this.ambientLayers.textureGain = textureGain;
+        this.ambientLayers.textureFilter = textureFilter;
         
-        console.log('AudioEngine: Ambient layers created');
+        // Initialize glitter and melodic note scheduling
+        this.glitterScheduled = false;
+        this.melodicScheduled = false;
+        
+        console.log('AudioEngine: Ambient layers created (with glitter, melodic pad, and texture)');
     }
     
     // Start slow evolution of all sound parameters
@@ -451,9 +503,36 @@ class AudioEngine {
             
             // Slowly evolve filter frequencies - more range
             if (this.ambientLayers?.breathFilter) {
-                const breathFreq = 400 + Math.sin(this.evolutionTime * 0.06) * 250 +
-                                  Math.sin(this.evolutionTime * 0.09) * 150;
+                const breathFreq = 350 + Math.sin(this.evolutionTime * 0.06) * 200 +
+                                  Math.sin(this.evolutionTime * 0.09) * 100;
                 this.ambientLayers.breathFilter.frequency.rampTo(breathFreq, 2);
+            }
+            
+            // Evolve new ambient layers
+            if (this.ambientLayers?.melodicGain) {
+                const melodicVol = Tone.dbToGain(-24 + Math.sin(this.evolutionTime * 0.025 + 2) * 6);
+                this.ambientLayers.melodicGain.gain.rampTo(melodicVol, 5);
+            }
+            
+            if (this.ambientLayers?.melodicFilter) {
+                const melodicFreq = 1000 + Math.sin(this.evolutionTime * 0.03) * 400;
+                this.ambientLayers.melodicFilter.frequency.rampTo(melodicFreq, 3);
+            }
+            
+            if (this.ambientLayers?.glitterGain) {
+                const glitterVol = Tone.dbToGain(-32 + Math.sin(this.evolutionTime * 0.08) * 8);
+                this.ambientLayers.glitterGain.gain.rampTo(glitterVol, 2);
+            }
+            
+            if (this.ambientLayers?.textureGain) {
+                const textureVol = Tone.dbToGain(-40 + Math.sin(this.evolutionTime * 0.04 + 3) * 10);
+                this.ambientLayers.textureGain.gain.rampTo(textureVol, 4);
+            }
+            
+            // Evolve glitter delay feedback for rhythmic interest
+            if (this.ambientLayers?.glitterDelay) {
+                const delayFeedback = 0.3 + Math.sin(this.evolutionTime * 0.05) * 0.2;
+                this.ambientLayers.glitterDelay.feedback.rampTo(delayFeedback, 2);
             }
             
             // Note: Effect parameters (chorus, phaser, delay, reverb) are now controlled by sliders
@@ -1201,6 +1280,11 @@ class AudioEngine {
                 this.ambientLayers.breath.start();
             }
             
+            // Start texture noise
+            if (this.ambientLayers.texture) {
+                this.ambientLayers.texture.start();
+            }
+            
             // Start shimmer pad with evolving chord
             if (this.ambientLayers.shimmerPad) {
                 // Play high ethereal notes
@@ -1208,10 +1292,71 @@ class AudioEngine {
                 this.ambientLayers.shimmerPad.triggerAttack(notes);
             }
             
-            console.log('AudioEngine: Ambient layers started');
+            // Start melodic pad with slow evolving chord
+            if (this.ambientLayers.melodicPad) {
+                const melodicNotes = ['E3', 'B3', 'D4', 'G4'];
+                this.ambientLayers.melodicPad.triggerAttack(melodicNotes);
+                this.startMelodicEvolution();
+            }
+            
+            // Start glitter sparkle scheduling
+            this.startGlitterScheduler();
+            
+            console.log('AudioEngine: Ambient layers started (with new atmospheric textures)');
         } catch (e) {
             console.warn('AudioEngine: Could not start ambient layers:', e);
         }
+    }
+    
+    // Schedule random glitter sparkles
+    startGlitterScheduler() {
+        if (this.glitterInterval) clearInterval(this.glitterInterval);
+        
+        const glitterNotes = ['C6', 'D6', 'E6', 'G6', 'A6', 'C7', 'E7'];
+        
+        this.glitterInterval = setInterval(() => {
+            if (!this.isPlaying || !this.ambientLayers?.glitter) return;
+            
+            // Random chance to play a sparkle (about every 2-5 seconds on average)
+            if (Math.random() < 0.15) {
+                const note = glitterNotes[Math.floor(Math.random() * glitterNotes.length)];
+                const velocity = 0.1 + Math.random() * 0.2;  // Gentle velocity
+                try {
+                    this.ambientLayers.glitter.triggerAttackRelease(note, '4n', undefined, velocity);
+                } catch(e) {}
+            }
+        }, 500);
+    }
+    
+    // Slowly evolve the melodic pad chord
+    startMelodicEvolution() {
+        if (this.melodicEvolutionInterval) clearInterval(this.melodicEvolutionInterval);
+        
+        const chordProgressions = [
+            ['E3', 'B3', 'D4', 'G4'],   // Em7
+            ['A3', 'C4', 'E4', 'G4'],   // Am7
+            ['D3', 'A3', 'C4', 'F4'],   // Dm7
+            ['G3', 'B3', 'D4', 'F4'],   // G7
+            ['C3', 'E3', 'G3', 'B3'],   // Cmaj7
+            ['F3', 'A3', 'C4', 'E4'],   // Fmaj7
+        ];
+        
+        let chordIndex = 0;
+        
+        this.melodicEvolutionInterval = setInterval(() => {
+            if (!this.isPlaying || !this.ambientLayers?.melodicPad) return;
+            
+            try {
+                // Slowly release current and start new chord
+                this.ambientLayers.melodicPad.releaseAll();
+                
+                setTimeout(() => {
+                    if (!this.isPlaying) return;
+                    chordIndex = (chordIndex + 1) % chordProgressions.length;
+                    this.ambientLayers.melodicPad.triggerAttack(chordProgressions[chordIndex]);
+                }, 2000);
+            } catch(e) {}
+        }, 25000);  // Change chord every ~25 seconds
     }
     
     stopAmbientLayers() {
@@ -1220,7 +1365,12 @@ class AudioEngine {
         try {
             if (this.ambientLayers.subBass) this.ambientLayers.subBass.stop();
             if (this.ambientLayers.breath) this.ambientLayers.breath.stop();
+            if (this.ambientLayers.texture) this.ambientLayers.texture.stop();
             if (this.ambientLayers.shimmerPad) this.ambientLayers.shimmerPad.releaseAll();
+            if (this.ambientLayers.melodicPad) this.ambientLayers.melodicPad.releaseAll();
+            
+            if (this.glitterInterval) clearInterval(this.glitterInterval);
+            if (this.melodicEvolutionInterval) clearInterval(this.melodicEvolutionInterval);
         } catch (e) {}
     }
     
@@ -1535,7 +1685,8 @@ class AudioEngine {
     resetHandSoundControl(soundName) {
         if (!this.isPlaying) return;
         
-        const rampTime = 0.8;  // Smooth return to default - slightly longer for pitch
+        const rampTime = 4.0;  // Much longer decay - let the pitch linger
+        const filterRampTime = 2.0;  // Filters can return faster
         
         switch (soundName) {
             case 'base':
@@ -1549,7 +1700,9 @@ class AudioEngine {
                         const rampDetune = () => {
                             const elapsed = Tone.now() - startTime;
                             const progress = Math.min(1, elapsed / rampTime);
-                            const newDetune = currentDetune * (1 - progress);
+                            // Use easeOut curve for more natural decay
+                            const eased = 1 - Math.pow(1 - progress, 2);
+                            const newDetune = currentDetune * (1 - eased);
                             if (this.drones.base?.synth) {
                                 this.drones.base.synth.set({ detune: Math.abs(newDetune) < 1 ? 0 : newDetune });
                             }
@@ -1561,7 +1714,7 @@ class AudioEngine {
                     }
                 }
                 if (this.drones.base?.filter) {
-                    this.drones.base.filter.frequency.rampTo(200, rampTime);
+                    this.drones.base.filter.frequency.rampTo(200, filterRampTime);
                 }
                 break;
                 
@@ -1574,7 +1727,9 @@ class AudioEngine {
                         const rampDetune = () => {
                             const elapsed = Tone.now() - startTime;
                             const progress = Math.min(1, elapsed / rampTime);
-                            const newDetune = currentDetune * (1 - progress);
+                            // Use easeOut curve for more natural decay
+                            const eased = 1 - Math.pow(1 - progress, 2);
+                            const newDetune = currentDetune * (1 - eased);
                             if (this.drones.mid?.synth) {
                                 this.drones.mid.synth.set({ detune: Math.abs(newDetune) < 1 ? 0 : newDetune });
                             }
@@ -1586,8 +1741,8 @@ class AudioEngine {
                     }
                 }
                 if (this.drones.mid?.filter) {
-                    this.drones.mid.filter.frequency.rampTo(800, rampTime);
-                    this.drones.mid.filter.Q.rampTo(2, rampTime);
+                    this.drones.mid.filter.frequency.rampTo(800, filterRampTime);
+                    this.drones.mid.filter.Q.rampTo(2, filterRampTime);
                 }
                 break;
                 
@@ -1600,7 +1755,9 @@ class AudioEngine {
                         const rampDetune = () => {
                             const elapsed = Tone.now() - startTime;
                             const progress = Math.min(1, elapsed / rampTime);
-                            const newDetune = currentDetune * (1 - progress);
+                            // Use easeOut curve for more natural decay
+                            const eased = 1 - Math.pow(1 - progress, 2);
+                            const newDetune = currentDetune * (1 - eased);
                             if (this.drones.high?.synth) {
                                 this.drones.high.synth.set({ detune: Math.abs(newDetune) < 1 ? 0 : newDetune });
                             }
@@ -1612,7 +1769,7 @@ class AudioEngine {
                     }
                 }
                 if (this.effects.delay) {
-                    this.effects.delay.feedback.rampTo(0.4, rampTime);
+                    this.effects.delay.feedback.rampTo(0.4, filterRampTime);
                 }
                 break;
                 
@@ -1625,7 +1782,9 @@ class AudioEngine {
                         const rampDetune = () => {
                             const elapsed = Tone.now() - startTime;
                             const progress = Math.min(1, elapsed / rampTime);
-                            const newDetune = currentDetune * (1 - progress);
+                            // Use easeOut curve for more natural decay
+                            const eased = 1 - Math.pow(1 - progress, 2);
+                            const newDetune = currentDetune * (1 - eased);
                             if (this.ambientLayers?.shimmerPad) {
                                 this.ambientLayers.shimmerPad.set({ detune: Math.abs(newDetune) < 1 ? 0 : newDetune });
                             }
@@ -1637,10 +1796,10 @@ class AudioEngine {
                     }
                 }
                 if (this.effects.reverb) {
-                    this.effects.reverb.wet.rampTo(0.5, rampTime);
+                    this.effects.reverb.wet.rampTo(0.5, filterRampTime);
                 }
                 if (this.effects.chorus) {
-                    this.effects.chorus.depth.rampTo(0.3, rampTime);
+                    this.effects.chorus.depth.rampTo(0.3, filterRampTime);
                 }
                 break;
         }

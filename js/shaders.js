@@ -701,12 +701,15 @@ const Shaders = {
             float distFromEdge = abs(distFromCenter - plateRadius);
             
             // Refraction is strongest right at the edge, fades inward
-            // Use smooth falloff from edge
-            float edgeRefraction = 1.0 - smoothstep(0.0, edgeWidth, distFromEdge);
+            // Use sharp falloff from edge for more prominent effect
+            float edgeRefraction = 1.0 - smoothstep(0.0, edgeWidth * 0.7, distFromEdge);
+            
+            // Boost edge intensity
+            edgeRefraction = pow(edgeRefraction, 0.7) * 1.4;
             
             // Add slight refraction across the whole plate (glass has some effect throughout)
             float plateInterior = smoothstep(plateRadius + edgeWidth, plateRadius - edgeWidth * 0.5, distFromCenter);
-            float interiorRefraction = plateInterior * 0.15;
+            float interiorRefraction = plateInterior * 0.2;
             
             return edgeRefraction + interiorRefraction;
         }
@@ -717,7 +720,8 @@ const Shaders = {
             float plateSpacing = maxRadius / max(numPlates, 1.0);
             
             // Edge width controls how thick the refraction band is at each plate edge
-            float edgeWidth = plateSpacing * mix(0.15, 0.45, 1.0 - edgeSharpness);
+            // Make edges sharper overall for more prominent rings
+            float edgeWidth = plateSpacing * mix(0.1, 0.35, 1.0 - edgeSharpness);
             
             for (float i = 1.0; i <= 16.0; i += 1.0) {
                 if (i > numPlates) break;
@@ -725,19 +729,21 @@ const Shaders = {
                 // Each plate has a slightly different radius (incremental sizes)
                 float plateIndex = i;
                 float waveOffset = getRingWaveOffset(plateIndex, numPlates, phase, delay, uWaveAmplitude);
-                float plateRadius = plateSpacing * i + waveOffset * 0.3;
+                // Increase wave offset influence for more motion
+                float plateRadius = plateSpacing * i + waveOffset * 0.5;
                 
                 // Calculate refraction contribution from this plate
                 float refraction = glassPlateRefraction(dist, plateRadius, edgeWidth);
                 
                 // Plates further out have slightly less effect (depth attenuation)
-                float depthFade = 1.0 - (i / numPlates) * 0.3;
+                // But reduce the falloff for stronger outer plates
+                float depthFade = 1.0 - (i / numPlates) * 0.2;
                 
                 totalRefraction += refraction * depthFade;
             }
             
-            // Normalize and add some variation
-            return totalRefraction * 0.7;
+            // Increase overall intensity for stronger effect
+            return totalRefraction * 1.0;
         }
         
         // ===========================================

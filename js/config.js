@@ -66,23 +66,23 @@ const CONFIG = {
     // AUDIO PARAMETERS
     // =========================================
     audio: {
-        masterVolume: -14,  // dB - reduced to prevent clipping
+        masterVolume: -16,  // dB - reduced further for softer default
         
-        // Drone layers configuration
+        // Drone layers configuration - reduced volumes for gentler sound
         drones: {
             // Base drone - deep, slow-moving
             base: {
                 enabled: true,
                 type: 'granular',
                 frequency: 55,          // Hz (A1)
-                volume: -18,            // dB - reduced
-                attack: 4,              // seconds
-                release: 8,
-                filterFreq: 200,        // Low-pass cutoff
-                filterQ: 1,
-                reverbWet: 0.6,
-                delayTime: 0.5,
-                delayFeedback: 0.3
+                volume: -24,            // dB - reduced significantly
+                attack: 5,              // seconds - slower attack
+                release: 10,
+                filterFreq: 180,        // Low-pass cutoff - darker
+                filterQ: 0.8,
+                reverbWet: 0.7,
+                delayTime: 0.6,
+                delayFeedback: 0.25
             },
             
             // Mid drone - harmonic content
@@ -90,14 +90,14 @@ const CONFIG = {
                 enabled: true,
                 type: 'granular',
                 frequency: 110,         // Hz (A2)
-                volume: -20,            // dB - reduced
-                attack: 3,
-                release: 6,
-                filterFreq: 800,
-                filterQ: 2,
-                reverbWet: 0.5,
-                delayTime: 0.33,
-                delayFeedback: 0.4
+                volume: -26,            // dB - reduced significantly
+                attack: 4,
+                release: 8,
+                filterFreq: 600,        // Darker
+                filterQ: 1.5,
+                reverbWet: 0.6,
+                delayTime: 0.4,
+                delayFeedback: 0.35
             },
             
             // High drone - shimmer and texture
@@ -105,14 +105,14 @@ const CONFIG = {
                 enabled: true,
                 type: 'granular',
                 frequency: 440,         // Hz (A4)
-                volume: -38,            // dB - reduced
-                attack: 2,
-                release: 4,
-                filterFreq: 4000,
-                filterQ: 0.5,
-                reverbWet: 0.7,
-                delayTime: 0.125,
-                delayFeedback: 0.5
+                volume: -42,            // dB - reduced significantly
+                attack: 3,
+                release: 6,
+                filterFreq: 3500,       // Slightly darker
+                filterQ: 0.4,
+                reverbWet: 0.8,
+                delayTime: 0.15,
+                delayFeedback: 0.45
             },
             
             // Glitch layer - chopped, rhythmic

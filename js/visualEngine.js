@@ -106,9 +106,29 @@ class VisualEngine {
         ];
         // Swirl momentum for circular motion continuation
         this.handSwirl = [0, 0];
-        this.handInertiaDecay = 0.992;     // Very slow decay for long-lasting slime trail
-        this.handMomentumDecay = 0.985;    // Momentum decays slightly faster
-        this.handSwirlDecay = 0.975;       // Swirl decays even faster
+        
+        // Spring physics for bouncy ribbon effect
+        this.springPosition = [
+            new THREE.Vector2(0.5, 0.5),
+            new THREE.Vector2(0.5, 0.5)
+        ];
+        this.springVelocity = [
+            new THREE.Vector2(0, 0),
+            new THREE.Vector2(0, 0)
+        ];
+        this.springTarget = [
+            new THREE.Vector2(0.5, 0.5),
+            new THREE.Vector2(0.5, 0.5)
+        ];
+        // Wave propagation buffer - stores ripples over time
+        this.waveRipples = [];
+        this.maxWaveRipples = 8;
+        
+        this.handInertiaDecay = 0.988;     // Slightly faster decay but longer trail
+        this.handMomentumDecay = 0.978;    // Momentum decays faster for bouncier feel
+        this.handSwirlDecay = 0.965;       // Swirl decays faster
+        this.springStiffness = 0.015;      // Low stiffness for slow, liquid spring
+        this.springDamping = 0.92;         // High damping for gentle oscillation
         this.fastSmoothingFrames = 0;
     }
     
@@ -391,53 +411,127 @@ class VisualEngine {
                 const rawStrength = hand.strengths?.[i] || 0;
                 const inertia = this.handInertia[i];
                 const momentum = this.handMomentum[i];
+                const springPos = this.springPosition[i];
+                const springVel = this.springVelocity[i];
+                const springTarget = this.springTarget[i];
                 const active = i < count && (rawStrength > 0.01 || Math.abs(vel.x) + Math.abs(vel.y) > 0.001);
                 
-                // Soft slimy physics - much gentler impulse
-                // Strength is scaled down significantly for softer effect
-                const softStrength = Math.pow(rawStrength, 1.5) * 0.4;  // Exponential falloff for soft feeling
-                const impulse = active ? (0.15 + softStrength * 0.6) : 0;  // Much gentler impulse
+                // Update spring target when hand is active
+                if (active) {
+                    springTarget.set(pos.x, pos.y);
+                    
+                    // Add wave ripple when there's significant movement
+                    const speed = Math.sqrt(vel.x * vel.x + vel.y * vel.y);
+                    if (speed > 0.02 && this.waveRipples.length < this.maxWaveRipples) {
+                        // Only add ripple every few frames to prevent spam
+                        const lastRipple = this.waveRipples[this.waveRipples.length - 1];
+                        if (!lastRipple || lastRipple.age > 8) {
+                            this.waveRipples.push({
+                                x: pos.x,
+                                y: pos.y,
+                                velX: vel.x * 0.5,
+                                velY: vel.y * 0.5,
+                                strength: Math.min(rawStrength * speed * 3, 0.5),
+                                age: 0,
+                                maxAge: 120  // Ripples last about 2 seconds at 60fps
+                            });
+                        }
+                    }
+                }
+                
+                // Spring physics - liquid bouncy motion
+                // Calculate spring force toward target
+                const dx = springTarget.x - springPos.x;
+                const dy = springTarget.y - springPos.y;
+                
+                // Apply spring force
+                springVel.x += dx * this.springStiffness;
+                springVel.y += dy * this.springStiffness;
+                
+                // Apply damping
+                springVel.x *= this.springDamping;
+                springVel.y *= this.springDamping;
+                
+                // Update position
+                springPos.x += springVel.x;
+                springPos.y += springVel.y;
+                
+                // Soft slimy physics - impulse from direct velocity
+                const softStrength = Math.pow(rawStrength, 1.5) * 0.5;
+                const impulse = active ? (0.2 + softStrength * 0.7) : 0;
                 
                 // Multi-layer momentum for organic slimy movement
-                // Primary inertia - immediate trailing
-                inertia.x = inertia.x * this.handInertiaDecay + vel.x * impulse * 0.7;
-                inertia.y = inertia.y * this.handInertiaDecay + vel.y * impulse * 0.7;
+                inertia.x = inertia.x * this.handInertiaDecay + vel.x * impulse * 0.8;
+                inertia.y = inertia.y * this.handInertiaDecay + vel.y * impulse * 0.8;
                 
                 // Secondary momentum - slower, heavier, like thick slime
-                momentum.x = momentum.x * this.handMomentumDecay + inertia.x * 0.1;
-                momentum.y = momentum.y * this.handMomentumDecay + inertia.y * 0.1;
+                momentum.x = momentum.x * this.handMomentumDecay + inertia.x * 0.12;
+                momentum.y = momentum.y * this.handMomentumDecay + inertia.y * 0.12;
                 
                 // Swirl momentum - creates circular continuation when released
                 const speed = Math.sqrt(vel.x * vel.x + vel.y * vel.y);
-                if (active && speed > 0.1) {
-                    // Cross product for rotation direction
-                    this.handSwirl[i] += (vel.x * inertia.y - vel.y * inertia.x) * 0.3;
+                if (active && speed > 0.08) {
+                    this.handSwirl[i] += (vel.x * inertia.y - vel.y * inertia.x) * 0.4;
                 }
                 this.handSwirl[i] *= this.handSwirlDecay;
                 
-                // Combined velocity with organic layering
-                const combinedVelX = inertia.x + momentum.x * 0.5;
-                const combinedVelY = inertia.y + momentum.y * 0.5;
+                // Combine spring velocity with momentum for final effect
+                // Spring gives the bouncy liquid feel, momentum gives the trailing
+                const combinedVelX = springVel.x * 2.0 + inertia.x * 0.6 + momentum.x * 0.4;
+                const combinedVelY = springVel.y * 2.0 + inertia.y * 0.6 + momentum.y * 0.4;
                 
-                // Add subtle swirl to position offset
-                const swirlOffsetX = -combinedVelY * this.handSwirl[i] * 0.1;
-                const swirlOffsetY = combinedVelX * this.handSwirl[i] * 0.1;
+                // Add subtle swirl to create circular motion
+                const swirlOffsetX = -combinedVelY * this.handSwirl[i] * 0.15;
+                const swirlOffsetY = combinedVelX * this.handSwirl[i] * 0.15;
 
-                grad.uHandPos.value[i].set(pos.x, pos.y);
+                grad.uHandPos.value[i].set(springPos.x, springPos.y);
                 grad.uHandVel.value[i].set(combinedVelX + swirlOffsetX, combinedVelY + swirlOffsetY);
-                grad.uHandStrength.value[i] = Math.min(softStrength * 0.8, 0.6);  // Capped much lower
-                disp.uHandPos.value[i].set(pos.x, pos.y);
+                grad.uHandStrength.value[i] = Math.min(softStrength * 0.9, 0.7);
+                disp.uHandPos.value[i].set(springPos.x, springPos.y);
                 disp.uHandVel.value[i].set(combinedVelX + swirlOffsetX, combinedVelY + swirlOffsetY);
-                disp.uHandStrength.value[i] = Math.min(softStrength * 0.8, 0.6);  // Capped much lower
+                disp.uHandStrength.value[i] = Math.min(softStrength * 0.9, 0.7);
             }
         } else {
             grad.uHandCount.value = 0;
             disp.uHandCount.value = 0;
-            // Continue physics simulation even without hand
+            // Continue physics simulation even without hand - this creates the lingering effect
             for (let i = 0; i < this.handInertia.length; i++) {
                 this.handInertia[i].multiplyScalar(this.handInertiaDecay);
                 this.handMomentum[i].multiplyScalar(this.handMomentumDecay);
                 this.handSwirl[i] *= this.handSwirlDecay;
+                
+                // Continue spring physics for bounce-back
+                const springPos = this.springPosition[i];
+                const springVel = this.springVelocity[i];
+                const springTarget = this.springTarget[i];
+                
+                // Gently return toward center when inactive
+                springTarget.x += (0.5 - springTarget.x) * 0.002;
+                springTarget.y += (0.5 - springTarget.y) * 0.002;
+                
+                const dx = springTarget.x - springPos.x;
+                const dy = springTarget.y - springPos.y;
+                springVel.x += dx * this.springStiffness * 0.5;
+                springVel.y += dy * this.springStiffness * 0.5;
+                springVel.x *= this.springDamping;
+                springVel.y *= this.springDamping;
+                springPos.x += springVel.x;
+                springPos.y += springVel.y;
+            }
+        }
+        
+        // Update and decay wave ripples
+        for (let i = this.waveRipples.length - 1; i >= 0; i--) {
+            const ripple = this.waveRipples[i];
+            ripple.age++;
+            ripple.strength *= 0.97;  // Slow fade
+            ripple.x += ripple.velX * 0.3;
+            ripple.y += ripple.velY * 0.3;
+            ripple.velX *= 0.98;
+            ripple.velY *= 0.98;
+            
+            if (ripple.age > ripple.maxAge || ripple.strength < 0.01) {
+                this.waveRipples.splice(i, 1);
             }
         }
         

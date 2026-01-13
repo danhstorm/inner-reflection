@@ -72,11 +72,11 @@ class AudioEngine {
         this.unmutedGain = null;
         this.lastAudioState = null;
         this.lastMicInput = null;
-        this.micDelayMaxTime = 30;
-        this.micDelayMaxTime2 = 60;
+        this.micDelayMaxTime = 10;
+        this.micDelayMaxTime2 = 10;
         this.micDelayParams = {
-            time: 1.2,
-            time2: 2.4,
+            time: 2,
+            time2: 4,
             drift: 0.4,
             stretch: 0.35,
             scatter: 0.25,
@@ -2072,6 +2072,52 @@ class AudioEngine {
                 layer.player.playbackRate = baseSpeed * (1 + driftAmount) * pitchMult;
             }
         });
+    }
+    
+    /**
+     * Apply face-driven audio modulation (mouth openness).
+     * Mouth open = more reverb, granular density, filter modulation.
+     * @param {number} mouthMod - Mouth openness 0-1
+     */
+    applyFaceAudio(mouthMod) {
+        if (!this.isPlaying || typeof mouthMod !== 'number') return;
+        
+        // Smooth the mouth modulation
+        if (!this._faceMouthSmooth) this._faceMouthSmooth = 0;
+        this._faceMouthSmooth += (mouthMod - this._faceMouthSmooth) * 0.08;
+        
+        const m = this._faceMouthSmooth;
+        
+        // Mouth open increases reverb wetness slightly (unless manually controlled)
+        if (this.effects.reverb && !this.manualControl.masterReverb) {
+            const baseWet = this.lastAudioState?.audioReverb ?? 0.3;
+            const targetWet = Math.min(0.8, 0.05 + baseWet * 0.25 + m * 0.2);
+            this.effects.reverb.wet.rampTo(targetWet, 0.15);
+        }
+        
+        // Mouth open increases delay feedback slightly
+        if (this.effects.delay && !this.manualControl.masterDelay) {
+            const baseDelay = this.lastAudioState?.audioDelay ?? 0.2;
+            const targetWet = Math.min(0.4, 0.015 + baseDelay * 0.18 + m * 0.1);
+            this.effects.delay.wet.rampTo(targetWet, 0.15);
+        }
+        
+        // Mouth open modulates granular grain size (larger grains = more ambient)
+        if (this.granularLayers) {
+            Object.values(this.granularLayers).forEach(layer => {
+                if (layer?.player && layer.config) {
+                    const baseGrain = layer.config.grainSize || 0.1;
+                    layer.player.grainSize = baseGrain * (1 + m * 0.5);
+                }
+            });
+        }
+        
+        // Mouth open also slightly opens high filter
+        if (this.drones.high && !this.manualControl.droneHighFilter) {
+            const baseFreq = this.lastAudioState?.audioFilterHigh ?? 0.5;
+            const targetFreq = 800 + baseFreq * 4000 + m * 1000;
+            this.drones.high.filter.frequency.rampTo(targetFreq, 0.2);
+        }
     }
 
     // =========================================

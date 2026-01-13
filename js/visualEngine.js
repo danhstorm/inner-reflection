@@ -500,21 +500,31 @@ class VisualEngine {
         disp.uMinRadius.value = this.smoothBuffer.minRadius;  // Smoothed center hole size
         disp.uEdgeSharpness.value = this.smoothBuffer.edgeSharpness;  // Smoothed edge
         
-        // Rotation - USE SMOOTHED VALUE combined with MUCH SLOWER animated rotation
-        const animatedRotation = this.time * (state.rotationSpeed || 0) * 0.1;  // 10x slower rotation
-        disp.uRotation.value = this.smoothBuffer.rotation + animatedRotation;
+        // === FACE-DRIVEN EFFECTS ===
+        // Face spin direction: head tilt (roll) affects rotation direction
+        const faceSpinInfluence = (state.faceSpinDirection ?? 0) * 0.15;
         
-        // Depth phase for 3D slice feel - slower
+        // Face darkness: closed eyes reduce brightness
+        const faceDarkness = state.faceDarkness ?? 0;
+        
+        // Face motion speed: more movement = faster animation
+        const faceMotionSpeed = state.faceMotionSpeed ?? 1.0;
+        
+        // Rotation - USE SMOOTHED VALUE combined with animated rotation + face spin
+        const animatedRotation = this.time * (state.rotationSpeed || 0) * 0.1 * faceMotionSpeed;
+        disp.uRotation.value = this.smoothBuffer.rotation + animatedRotation + faceSpinInfluence;
+        
+        // Depth phase for 3D slice feel - affected by face motion speed
         disp.uBreathingPhase.value = this.breathingPhase;
-        disp.uDepthPhase.value = this.time * 0.04;  // Much slower depth pulse
+        disp.uDepthPhase.value = this.time * 0.04 * faceMotionSpeed;
         
         // Post-processing uniforms - USE SMOOTHED VALUES
         post.uBlur.value = this.smoothBuffer.blur;
-        post.uGlow.value = this.smoothBuffer.glow * 0.6;
-        post.uVignette.value = this.smoothBuffer.vignette ?? state.vignette ?? 0;  // 0 = no vignette
+        post.uGlow.value = this.smoothBuffer.glow * 0.6 * (1 - faceDarkness * 0.5);
+        post.uVignette.value = (this.smoothBuffer.vignette ?? state.vignette ?? 0) + faceDarkness * 0.3;
         post.uVignetteShape.value = state.vignetteShape ?? 0.5;  // 0=rectangular, 1=oval
-        post.uSaturation.value = state.saturationPost;
-        post.uBrightness.value = state.brightnessPost;
+        post.uSaturation.value = state.saturationPost * (1 - faceDarkness * 0.3);
+        post.uBrightness.value = state.brightnessPost * (1 - faceDarkness * 0.4);
         post.uContrast.value = state.contrastPost;
         post.uNoiseAmount.value = state.noiseAmount;
     }

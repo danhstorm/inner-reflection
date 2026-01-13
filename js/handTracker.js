@@ -174,7 +174,18 @@ class HandTracker {
             }, { z: 0 });
             tipCenter.z /= tipIndices.length;
             
-            const palmFacing = palmCenter.z < tipCenter.z - 0.015;
+            // Palm facing detection - MORE LENIENT threshold
+            // Also consider: palm is "facing" if fingers are spread (not a fist)
+            // Z-threshold relaxed from -0.015 to -0.005
+            const zDiff = palmCenter.z - tipCenter.z;
+            const palmFacingByZ = zDiff < -0.005;
+            
+            // Alternative: consider it palm-facing if hand is open (low fist value)
+            // and fingers are spread out (detected by avgTipDist being large)
+            const isOpenHand = fist < 0.4 && avgTipDist > palmSpan * 0.8;
+            
+            // Combined: either z-depth says palm facing, OR hand is clearly open
+            const palmFacing = palmFacingByZ || isOpenHand;
             this.handState.palmFacing[i] = palmFacing;
             
             const vx = (palmCenter.x - dyn.lastCenter.x) / delta;
@@ -191,8 +202,10 @@ class HandTracker {
                 dyn.hold = Math.max(0, dyn.hold - delta * 0.5);
             }
             
-            const grabTarget = palmFacing ? Utils.clamp(dyn.hold / 1.5, 0, 1) * (0.4 + steadiness * 0.6) : 0;
-            dyn.grab += (grabTarget - dyn.grab) * 0.06;
+            // For grip strength, also factor in how open the hand is (inverted fist value)
+            const openness = 1 - fist;
+            const grabTarget = palmFacing ? Utils.clamp(dyn.hold / 1.5, 0, 1) * (0.4 + steadiness * 0.6) * (0.5 + openness * 0.5) : 0;
+            dyn.grab += (grabTarget - dyn.grab) * 0.08;
             
             const strength = Utils.clamp(dyn.grab * (0.85 + speed * 2.0), 0, 1);
             strengths[i] = strength;

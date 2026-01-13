@@ -44,7 +44,9 @@ class InnerReflectionApp {
         this.isPaused = false;
         this.isMuted = false;
         this.lastTime = 0;
+        this.startTime = 0;  // When experience started
         this.frameCount = 0;
+        this.previewTrackingActive = false;  // For start screen camera preview
         
         // Track active slider interactions (don't update these from state)
         this.activeSliders = new Set();
@@ -134,6 +136,13 @@ class InnerReflectionApp {
             engagement: 0.5, lookingAtScreen: 0.5,
             detected: false
         };
+        
+        // Face detection startup grace period (3 seconds before showing "no face")
+        this.faceDetectionState = {
+            lastDetectedTime: 0,
+            everDetected: false,
+            showNoFaceAfter: 3000  // 3 seconds grace period
+        };
 
         this.pointerHand = {
             active: false,
@@ -164,6 +173,20 @@ class InnerReflectionApp {
             pushX: { value: 0, velocity: 0 },
             pushY: { value: 0, velocity: 0 },
             pushSize: { value: 0, velocity: 0 }
+        };
+        
+        // Face-driven visual parameters (smoothed)
+        this.faceVisual = {
+            blobOffsetX: 0,
+            blobOffsetY: 0,
+            spinDirection: 0,      // Head roll affects spin direction
+            darknessAmount: 0,     // Closed eyes = darker
+            motionSpeed: 1.0,      // Face movement speed affects animation
+            mouthAudioMod: 0,      // Mouth openness for audio modulation
+            lastFaceX: 0.5,
+            lastFaceY: 0.5,
+            lastTime: performance.now(),
+            movementVelocity: 0
         };
         
         // Bound methods
@@ -374,6 +397,10 @@ class InnerReflectionApp {
     startPreview() {
         // Run a simplified render loop for the preview behind the start screen
         this.previewStartTime = performance.now();
+        
+        // Start preview tracking (camera + face/hand) for the start screen
+        this.startPreviewTracking();
+        
         const previewLoop = (time) => {
             if (this.isRunning) return; // Stop preview when main experience starts
             
@@ -397,11 +424,70 @@ class InnerReflectionApp {
                 this.visualEngine.render(deltaTime * this.currentAnimSpeed, visualState);
             }
             
+            // Draw tracking overlays during preview (for beta)
+            if (this.previewTrackingActive) {
+                // Process hand frames if tracking
+                if (this.handTracker?.isRunning && this.inputManager.enabled.camera) {
+                    this.handTracker.processFrame(this.inputManager.getVideoElement());
+                }
+                
+                // Draw face overlay
+                const faceData = this.faceTracker?.getFaceData() || { detected: false };
+                if (this.showFaceOverlay) {
+                    this.drawFaceOverlay(faceData);
+                }
+                
+                // Draw hand overlay
+                const handState = this.handTracker?.getHandState();
+                if (this.showHandOverlay) {
+                    this.drawHandOverlay(handState);
+                }
+            }
+            
             this.frameCount++;
             requestAnimationFrame(previewLoop);
         };
         
         requestAnimationFrame(previewLoop);
+    }
+    
+    /**
+     * Start camera and tracking during start screen (beta feature).
+     * This allows users to see themselves in the overlays before starting.
+     */
+    async startPreviewTracking() {
+        this.previewTrackingActive = false;
+        
+        // Only start if camera permission is enabled in toggles
+        if (!this.enabledInputs.camera) return;
+        
+        try {
+            // Request camera
+            const cameraOk = await this.inputManager.requestCamera();
+            if (!cameraOk) {
+                console.log('InnerReflection: Preview tracking - camera not available');
+                return;
+            }
+            
+            // Start face tracking
+            if (this.enabledInputs.faceTracking) {
+                await this.faceTracker.init(this.inputManager.getVideoElement());
+                this.faceTracker.stop();
+                await this.faceTracker.start();
+            }
+            
+            // Start hand tracking
+            if (this.enabledInputs.hands) {
+                await this.handTracker.init(this.inputManager.getVideoElement());
+                this.handTracker.start();
+            }
+            
+            this.previewTrackingActive = true;
+            console.log('InnerReflection: Preview tracking started');
+            
+        } catch (error) {
+            console.warn('InnerReflection: Preview tracking failed:', error);
+        }
     }
     
     // =========================================
@@ -443,8 +529,11 @@ class InnerReflectionApp {
             }
             
             // Start face tracking if camera is enabled (models preloaded)
+            // Skip if already started during preview
             if (this.enabledInputs.camera && this.inputManager.enabled.camera && this.enabledInputs.faceTracking) {
-                await this.startFaceTracking();
+                if (!this.faceTracker.isRunning) {
+                    await this.startFaceTracking();
+                }
                 
                 // Set up face tracking callbacks
                 this.faceTracker.onFaceDetected = (data) => {
@@ -458,11 +547,17 @@ class InnerReflectionApp {
             
             this.setFaceOverlayVisible(true);
             
+            // Skip hand tracking init if already started during preview
             if (this.enabledInputs.camera && this.inputManager.enabled.camera && this.enabledInputs.hands) {
-                await this.startHandTracking();
+                if (!this.handTracker.isRunning) {
+                    await this.startHandTracking();
+                }
             }
             
             this.setHandOverlayVisible(true);
+            
+            // Preview tracking is no longer needed (main loop takes over)
+            this.previewTrackingActive = false;
             
             // Start the visual fade-in immediately
             // Start screen is already fading, so visuals can intensify right away
@@ -491,6 +586,8 @@ class InnerReflectionApp {
             // Start main render loop
             this.isRunning = true;
             this.lastTime = performance.now();
+            this.startTime = performance.now();  // Track when experience started
+            this.faceDetectionState.lastDetectedTime = this.startTime;  // Reset grace period timer
             requestAnimationFrame(this.animate);
             
             console.log('InnerReflection: Experience started');
@@ -609,6 +706,9 @@ class InnerReflectionApp {
                 // Rich face features (Face Mesh) - head rotation, eyes, mouth, brows
                 this.stateEngine.handleFaceFeatures(faceData);
                 
+                // Direct face-to-visual mapping (blob offset, spin, darkness, speed)
+                this.updateFaceVisual(faceData, deltaTime);
+                
                 // Handle discrete events
                 if (faceData.blinking) {
                     this.stateEngine.handleBlink();
@@ -655,6 +755,11 @@ class InnerReflectionApp {
                 // Apply generative behaviors
                 this.audioEngine.applySpeedDrift?.(scaledDelta);
                 this.applyHandAudio(mergedHandState, deltaTime);
+                
+                // Apply face-driven audio modulation (mouth openness)
+                if (this.faceVisual?.mouthAudioMod !== undefined) {
+                    this.audioEngine.applyFaceAudio?.(this.faceVisual.mouthAudioMod);
+                }
             }
             
             // Render visuals
@@ -723,6 +828,10 @@ class InnerReflectionApp {
             // Copy boolean/transient values directly
             this.lastFaceData.talking = faceData.talking;
             this.lastFaceData.blinking = faceData.blinking;
+            
+            // Track detection time for grace period
+            this.faceDetectionState.lastDetectedTime = performance.now();
+            this.faceDetectionState.everDetected = true;
         }
         
         // Use the smoothed/persisted face data for drawing
@@ -744,7 +853,26 @@ class InnerReflectionApp {
         }
         
         if (!drawData.detected) {
-            // Draw "no face" indicator only if never detected
+            // Only show "no face" message after grace period (3 seconds)
+            const now = performance.now();
+            const timeSinceLastDetection = now - this.faceDetectionState.lastDetectedTime;
+            const shouldShowNoFace = this.faceDetectionState.everDetected 
+                ? timeSinceLastDetection > this.faceDetectionState.showNoFaceAfter
+                : (now - this.startTime > this.faceDetectionState.showNoFaceAfter);
+            
+            if (!shouldShowNoFace) {
+                // During grace period, show a subtle "searching" indicator
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([2, 4]);
+                ctx.beginPath();
+                ctx.ellipse(w/2, h/2 - 15, 35, 45, 0, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                return;
+            }
+            
+            // After grace period, show "no face" indicator
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
             ctx.lineWidth = 1;
             ctx.setLineDash([4, 4]);
@@ -1070,6 +1198,93 @@ class InnerReflectionApp {
             smooth.velocity *= 0.95;
             smooth.value += smooth.velocity * deltaTime * 60;
         });
+        
+        // Decay face visual parameters when no face
+        this.decayFaceVisual(deltaTime);
+    }
+    
+    /**
+     * Update face-driven visual parameters from face data.
+     * This creates direct, visible connections between face movements and visuals:
+     * - Nose position moves blob center (blobOffsetX/Y)
+     * - Head tilt (roll) controls spin direction
+     * - Eye closedness darkens the scene
+     * - Face movement speed affects animation speed
+     * - Mouth openness modulates audio
+     */
+    updateFaceVisual(faceData, deltaTime) {
+        if (!faceData || !faceData.detected) return;
+        
+        const fv = this.faceVisual;
+        const now = performance.now();
+        const dt = (now - fv.lastTime) / 1000;
+        fv.lastTime = now;
+        
+        // Smoothing factors
+        const smoothFast = 0.15;
+        const smoothMed = 0.08;
+        const smoothSlow = 0.04;
+        
+        // === BLOB OFFSET FROM NOSE/FACE POSITION ===
+        // faceX: 0 = left, 1 = right (mirrored camera, so invert)
+        // faceY: 0 = top, 1 = bottom
+        // Map face position to blob offset range (-0.3 to 0.3)
+        const mirroredX = 1 - faceData.faceX;
+        const targetOffsetX = (mirroredX - 0.5) * 0.6;
+        const targetOffsetY = (faceData.faceY - 0.5) * 0.5;
+        
+        fv.blobOffsetX += (targetOffsetX - fv.blobOffsetX) * smoothFast;
+        fv.blobOffsetY += (targetOffsetY - fv.blobOffsetY) * smoothFast;
+        
+        // === SPIN DIRECTION FROM HEAD ROLL ===
+        // headRoll: negative = tilting head left, positive = right
+        // Map to spin direction: -1 to 1
+        const targetSpin = Utils.clamp(faceData.headRoll * 2, -1, 1);
+        fv.spinDirection += (targetSpin - fv.spinDirection) * smoothMed;
+        
+        // === DARKNESS FROM CLOSED EYES ===
+        // Average eye openness: 0 = closed, 1 = open
+        const eyeOpenness = (faceData.leftEyeOpen + faceData.rightEyeOpen) / 2;
+        // Invert: low openness = high darkness
+        const targetDarkness = Utils.clamp(1 - eyeOpenness * 1.3, 0, 0.6);
+        fv.darknessAmount += (targetDarkness - fv.darknessAmount) * smoothSlow;
+        
+        // === MOTION SPEED FROM FACE MOVEMENT ===
+        // Track how fast the face is moving for animation speed
+        const dx = Math.abs(faceData.faceX - fv.lastFaceX);
+        const dy = Math.abs(faceData.faceY - fv.lastFaceY);
+        const headMovement = Math.hypot(dx, dy) / Math.max(dt, 0.01);
+        fv.lastFaceX = faceData.faceX;
+        fv.lastFaceY = faceData.faceY;
+        
+        // Smooth the velocity
+        fv.movementVelocity += (headMovement - fv.movementVelocity) * 0.1;
+        
+        // Map velocity to speed multiplier (0.8 to 1.5)
+        const targetSpeed = 0.9 + Utils.clamp(fv.movementVelocity * 3, 0, 0.6);
+        fv.motionSpeed += (targetSpeed - fv.motionSpeed) * smoothMed;
+        
+        // === MOUTH AUDIO MODULATION ===
+        // Smooth the mouth openness for audio
+        const targetMouthMod = Utils.clamp(faceData.mouthOpen * 1.5, 0, 1);
+        fv.mouthAudioMod += (targetMouthMod - fv.mouthAudioMod) * smoothFast;
+    }
+    
+    /**
+     * Decay face visual parameters when no face is detected
+     */
+    decayFaceVisual(deltaTime) {
+        const fv = this.faceVisual;
+        const decayRate = 0.02;
+        
+        // Slowly return to center/neutral
+        fv.blobOffsetX *= (1 - decayRate);
+        fv.blobOffsetY *= (1 - decayRate);
+        fv.spinDirection *= (1 - decayRate);
+        fv.darknessAmount *= (1 - decayRate);
+        fv.motionSpeed += (1.0 - fv.motionSpeed) * decayRate;
+        fv.mouthAudioMod *= (1 - decayRate);
+        fv.movementVelocity *= (1 - decayRate);
     }
     
     updateFPS(deltaTime) {
@@ -1951,6 +2166,12 @@ class InnerReflectionApp {
     
     applyManualVisualParams(visualState) {
         if (!visualState || !this.manualVisual) return;
+        
+        // Get face-driven offsets (added to manual controls)
+        const fv = this.faceVisual;
+        const faceOffsetX = fv?.blobOffsetX ?? 0;
+        const faceOffsetY = fv?.blobOffsetY ?? 0;
+        
         Object.assign(visualState, {
             ringDelay: this.manualVisual.ringDelay,
             ringOverlayStrength: this.manualVisual.ringOverlayStrength,
@@ -1971,8 +2192,15 @@ class InnerReflectionApp {
             blobInvert: this.manualVisual.blobInvert,
             blobFade: this.manualVisual.blobFade,
             blobWarp: this.manualVisual.blobWarp,
-            blobOffsetX: this.manualVisual.blobOffsetX,
-            blobOffsetY: this.manualVisual.blobOffsetY
+            // Combine manual offset with face-driven offset
+            blobOffsetX: this.manualVisual.blobOffsetX + faceOffsetX,
+            blobOffsetY: this.manualVisual.blobOffsetY + faceOffsetY,
+            // Face-driven spin direction (head tilt)
+            faceSpinDirection: fv?.spinDirection ?? 0,
+            // Face-driven darkness (closed eyes)
+            faceDarkness: fv?.darknessAmount ?? 0,
+            // Face-driven motion speed
+            faceMotionSpeed: fv?.motionSpeed ?? 1.0
         });
     }
 

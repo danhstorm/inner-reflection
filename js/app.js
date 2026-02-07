@@ -98,7 +98,7 @@ class InnerReflectionApp {
             parallelZoomDrift: 0.15,
             parallelSpin: 0.15,
             parallelThickness: 0.28,
-            parallelPresence: 0.0,     // Start with no parallel presence
+            parallelPresence: 0.5,     // Default visible presence so strength slider works
             blobCount: 8,              // Fewer blobs for cleaner look
             blobSpread: 0.75,
             blobScale: 0.95,
@@ -117,10 +117,14 @@ class InnerReflectionApp {
         this.sliderInputState = new Map();
         this.columnStateKey = 'innerReflection.columnState';
         this.previewStartTime = 0;
-        this.previewHoldDuration = 6;
+        this.previewHoldDuration = 12;  // Longer hold so rings linger more
         this.animSpeedMin = 0.25;
         this.animSpeedMax = 0.8;
         this.currentAnimSpeed = 0.4;
+        
+        // Randomized start state
+        this.startRandomization = null;
+        this.startRandomizationDuration = 30;  // 30 seconds of randomized movement
         
         // Face feature tracking state
         this.wasTalking = false;
@@ -150,7 +154,7 @@ class InnerReflectionApp {
             y: 0.5,
             vx: 0,
             vy: 0,
-            strength: 0.6,
+            strength: 0.5,  // Visible smoke effect
             lastX: 0.5,
             lastY: 0.5,
             lastTime: 0
@@ -213,6 +217,21 @@ class InnerReflectionApp {
             lastFaceY: 0.5,
             lastTime: performance.now(),
             movementVelocity: 0
+        };
+        
+        // Visual evolution system - slow automated parameter changes
+        this.visualEvolution = {
+            lastUpdateTime: 0,
+            params: {
+                blobMotion: { value: 0.4, target: 0.4, min: 0.2, max: 0.8, nextChange: 0 },
+                blobBlur: { value: 0.75, target: 0.75, min: 0.4, max: 0.95, nextChange: 0 },
+                blobWarp: { value: 0.25, target: 0.25, min: 0.1, max: 0.5, nextChange: 0 },
+                blobSmear: { value: 0.6, target: 0.6, min: 0.3, max: 0.9, nextChange: 0 },
+                ringDelay: { value: 0.35, target: 0.35, min: 0.1, max: 0.6, nextChange: 0 },
+                ringOverlayStrength: { value: 0.4, target: 0.4, min: 0.1, max: 0.7, nextChange: 0 },
+                parallelZoomDrift: { value: 0.15, target: 0.15, min: 0.05, max: 0.4, nextChange: 0 },
+                parallelSpin: { value: 0.15, target: 0.15, min: 0.0, max: 0.3, nextChange: 0 }
+            }
         };
         
         // Bound methods
@@ -382,33 +401,39 @@ class InnerReflectionApp {
             });
         }
         
-        // Also allow clicking the title to start, with kerning animation
+        // Click title OR start button to start - zoom and fade out
         const title = document.querySelector('.start-title');
+        const startBtn = document.querySelector('.start-button');
+        
+        const triggerStart = () => {
+            // Prevent double-triggering
+            if (title && title.classList.contains('clicked')) return;
+            if (title) title.classList.add('clicked');
+            
+            // Fade out everything together immediately
+            const glassOverlay = document.querySelector('.glass-overlay');
+            const permissionsContainer = document.querySelector('.permissions-container');
+            const headphonesNote = document.querySelector('.headphones-note');
+            const keyboardHint = document.querySelector('.keyboard-hint');
+            const startButton = document.querySelector('.start-button');
+            
+            if (glassOverlay) glassOverlay.classList.add('fading-out');
+            // Title gets zoom effect
+            if (title) title.classList.add('zooming');
+            if (permissionsContainer) permissionsContainer.classList.add('fading-out');
+            if (headphonesNote) headphonesNote.classList.add('fading-out');
+            if (keyboardHint) keyboardHint.classList.add('fading-out');
+            if (startButton) startButton.classList.add('fading-out');
+            
+            // Start the experience after fade completes
+            setTimeout(() => this.start(), 2500);
+        };
+        
         if (title) {
             title.style.cursor = 'pointer';
             title.addEventListener('click', (e) => {
                 e.preventDefault();
-                // Prevent double-triggering
-                if (title.classList.contains('clicked')) return;
-                // Add clicked class for slower kerning shrink animation (0.9s)
-                title.classList.add('clicked');
-                
-                // Fade out glass overlay smoothly
-                const glassOverlay = document.querySelector('.glass-overlay');
-                if (glassOverlay) {
-                    glassOverlay.classList.add('fading-out');
-                }
-                
-                // After kerning completes (0.9s), fade out title and toggles together
-                const permissionsContainer = document.querySelector('.permissions-container');
-                setTimeout(() => {
-                    title.classList.add('fading-out');
-                    if (permissionsContainer) {
-                        permissionsContainer.classList.add('fading-out');
-                    }
-                    // Start the experience after fade completes (2s for smoother transition)
-                    setTimeout(() => this.start(), 2000);
-                }, 900);
+                triggerStart();
             });
             
             // For touch devices, handle touchend to trigger the click action
@@ -425,6 +450,14 @@ class InnerReflectionApp {
             title.addEventListener('touchstart', (e) => {
                 // Just visual feedback, no action yet
             }, { passive: true });
+        }
+        
+        // Start button also triggers start
+        if (startBtn) {
+            startBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                triggerStart();
+            });
         }
     }
     
@@ -444,22 +477,20 @@ class InnerReflectionApp {
             // Keep the starting look for longer, then slowly let drift evolve
             const elapsed = (time - this.previewStartTime) / 1000;
             const holdProgress = Utils.clamp(elapsed / this.previewHoldDuration, 0, 1);
-            const previewScale = 0.05 + Utils.smoothstep(0, 1, holdProgress) * 0.95;
+            const previewScale = 0.3 + Utils.smoothstep(0, 1, holdProgress) * 0.7;
             this.updateAnimationSpeed();
             const previewDelta = deltaTime * previewScale * this.currentAnimSpeed;
             this.stateEngine.update(previewDelta);
             
-            // Render at reduced rate for preview
-            if (this.frameCount % 2 === 0) {
-                const visualState = this.stateEngine.getVisualState();
-                this.applyManualVisualParams(visualState);
-                // Add vignetteShape from local slider
-                visualState.vignetteShape = this.vignetteShape ?? 0.5;
-                this.visualEngine.render(deltaTime * this.currentAnimSpeed, visualState);
-            }
+            // Render every frame for smooth preview animation
+            const visualState = this.stateEngine.getVisualState();
+            this.applyManualVisualParams(visualState);
+            // Add vignetteShape from local slider
+            visualState.vignetteShape = this.vignetteShape ?? 0.5;
+            this.visualEngine.render(deltaTime * this.currentAnimSpeed, visualState);
             
-            // Draw tracking overlays during preview (for beta)
-            if (this.previewTrackingActive) {
+            // Draw tracking overlays during preview (throttled for performance)
+            if (this.previewTrackingActive && this.frameCount % 3 === 0) {
                 // Process hand frames if tracking
                 if (this.handTracker?.isRunning && this.inputManager.enabled.camera) {
                     this.handTracker.processFrame(this.inputManager.getVideoElement());
@@ -621,6 +652,10 @@ class InnerReflectionApp {
             this.lastTime = performance.now();
             this.startTime = performance.now();  // Track when experience started
             this.faceDetectionState.lastDetectedTime = this.startTime;  // Reset grace period timer
+            
+            // Initialize randomized start - moves parameters for unique beginning each time
+            this.initStartRandomization();
+            
             requestAnimationFrame(this.animate);
             
             console.log('InnerReflection: Experience started');
@@ -682,6 +717,80 @@ class InnerReflectionApp {
     }
     
     // =========================================
+    // RANDOMIZED START - Unique beginning each time
+    // =========================================
+    
+    initStartRandomization() {
+        // Select random parameters to animate over the first 30 seconds
+        // Each parameter gets a random speed, range, and phase
+        const stateParams = [
+            'colorHue1', 'colorHue2', 'colorHue3', 'colorHue4',
+            'colorSaturation', 'colorBrightness',
+            'displacementStrength', 'displacementRadius', 'displacementChromatic',
+            'waveAmplitude', 'waveSpeed', 'waveDelay',
+            'morphProgress', 'edgeSharpness', 'foldAmount', 'invertAmount',
+            'secondaryWave', 'tertiaryWave'
+        ];
+        
+        // Randomly select 6-10 parameters to animate
+        const numParams = 6 + Math.floor(Math.random() * 5);
+        const shuffled = stateParams.sort(() => Math.random() - 0.5);
+        const selectedParams = shuffled.slice(0, numParams);
+        
+        this.startRandomization = {
+            startTime: performance.now(),
+            duration: this.startRandomizationDuration * 1000,
+            params: selectedParams.map(param => ({
+                name: param,
+                speed: 0.3 + Math.random() * 1.5,        // Random speed multiplier
+                amplitude: 0.1 + Math.random() * 0.4,    // How much to vary
+                phase: Math.random() * Math.PI * 2,      // Random starting phase
+                direction: Math.random() > 0.5 ? 1 : -1  // Random direction
+            }))
+        };
+        
+        console.log('InnerReflection: Start randomization initialized with params:', 
+            this.startRandomization.params.map(p => p.name));
+    }
+    
+    updateStartRandomization(deltaTime) {
+        if (!this.startRandomization) return;
+        
+        const elapsed = performance.now() - this.startRandomization.startTime;
+        const progress = elapsed / this.startRandomization.duration;
+        
+        if (progress >= 1) {
+            this.startRandomization = null;
+            return;
+        }
+        
+        // Fade out the effect gradually
+        const fadeOut = 1 - Math.pow(progress, 0.5);
+        
+        // Apply oscillating changes to selected parameters
+        for (const param of this.startRandomization.params) {
+            const wave = Math.sin(elapsed * 0.001 * param.speed + param.phase);
+            const delta = wave * param.amplitude * param.direction * fadeOut * deltaTime * 0.5;
+            
+            // Apply to state engine using proper accessor
+            const dimIdx = this.stateEngine.dimensions[param.name];
+            if (dimIdx !== undefined) {
+                const currentVal = this.stateEngine.target[dimIdx];
+                if (typeof currentVal === 'number') {
+                    // Clamp to reasonable bounds
+                    let newVal = currentVal + delta;
+                    if (param.name.startsWith('color')) {
+                        newVal = (newVal + 1) % 1; // Wrap hues
+                    } else {
+                        newVal = Utils.clamp(newVal, 0, 1);
+                    }
+                    this.stateEngine.target[dimIdx] = newVal;
+                }
+            }
+        }
+    }
+
+    // =========================================
     // MAIN RENDER LOOP
     // =========================================
     
@@ -700,6 +809,9 @@ class InnerReflectionApp {
         if (!this.isPaused) {
             // Update inputs
             this.inputManager.update();
+            
+            // Update start randomization (first 30 seconds)
+            this.updateStartRandomization(scaledDelta);
             
             // Get input data
             const audioData = this.inputManager.getAudioData();
@@ -767,6 +879,9 @@ class InnerReflectionApp {
             
             // Update state engine (drift, interpolation, connections)
             this.stateEngine.update(scaledDelta);
+            
+            // Update visual evolution (automated parameter changes)
+            this.updateVisualEvolution(deltaTime, audioData);
             
             // Get state for rendering
             const visualState = this.stateEngine.getVisualState();
@@ -928,9 +1043,9 @@ class InnerReflectionApp {
         const faceY = drawData.faceY;
         
         // Map face position to overlay canvas
-        // Allow face to move within the overlay area
-        const moveRangeX = 50; // pixels of movement range
-        const moveRangeY = 40;
+        // Allow face to move significantly within the overlay area
+        const moveRangeX = w * 0.6; // 60% of width for horizontal movement
+        const moveRangeY = h * 0.5; // 50% of height for vertical movement
         const cx = w/2 + (mirroredX - 0.5) * moveRangeX;
         const cy = h/2 - 15 + (faceY - 0.5) * moveRangeY;
         
@@ -1320,6 +1435,46 @@ class InnerReflectionApp {
         fv.movementVelocity *= (1 - decayRate);
     }
     
+    /**
+     * Update visual evolution - slow automated parameter changes
+     * Creates organic, living visual changes over time
+     */
+    updateVisualEvolution(deltaTime, audioData) {
+        const ve = this.visualEvolution;
+        const now = performance.now();
+        
+        // Audio reactivity factor (0-1)
+        const audioLevel = audioData?.loudness ?? 0;
+        const audioReactivity = Utils.clamp(audioLevel * 2, 0, 1);
+        
+        for (const [key, param] of Object.entries(ve.params)) {
+            // Check if it's time to pick a new target
+            if (now > param.nextChange) {
+                // Random wait between 15-45 seconds
+                const waitTime = 15000 + Math.random() * 30000;
+                param.nextChange = now + waitTime;
+                
+                // Pick new target within range (weighted toward current value)
+                const range = param.max - param.min;
+                const randomOffset = (Math.random() - 0.5) * range * 0.6;
+                param.target = Utils.clamp(
+                    param.value + randomOffset,
+                    param.min,
+                    param.max
+                );
+            }
+            
+            // Slowly interpolate toward target
+            const speed = 0.002 + audioReactivity * 0.003;
+            param.value += (param.target - param.value) * speed;
+            
+            // Update the manual visual parameter
+            if (this.manualVisual.hasOwnProperty(key)) {
+                this.manualVisual[key] = param.value;
+            }
+        }
+    }
+    
     updateFPS(deltaTime) {
         const fps = 1 / deltaTime;
         this.fpsHistory.push(fps);
@@ -1511,8 +1666,9 @@ class InnerReflectionApp {
         
         this.pointerHand.x = x;
         this.pointerHand.y = y;
-        this.pointerHand.vx = Utils.clamp(vx, -1.5, 1.5);
-        this.pointerHand.vy = Utils.clamp(vy, -1.5, 1.5);
+        // Visible velocity for smoke effect
+        this.pointerHand.vx = Utils.clamp(vx * 0.8, -1.2, 1.2);
+        this.pointerHand.vy = Utils.clamp(vy * 0.8, -1.2, 1.2);
         this.pointerHand.lastX = x;
         this.pointerHand.lastY = y;
         this.pointerHand.lastTime = time;
@@ -1725,26 +1881,26 @@ class InnerReflectionApp {
         this.setupStateSlider('ctrl-saturation', 'val-saturation', 'colorSaturation');
         this.setupStateSlider('ctrl-brightness', 'val-brightness', 'colorBrightness');
         
-        this.setupStateSlider('ctrl-strength', 'val-strength', 'displacementStrength');
-        this.setupStateSlider('ctrl-radius', 'val-radius', 'displacementRadius');
-        this.setupStateSlider('ctrl-rings', 'val-rings', 'displacementRings', 20);
+        this.setupStateSlider('ctrl-strength', 'val-strength', 'displacementStrength', 2);
+        this.setupStateSlider('ctrl-radius', 'val-radius', 'displacementRadius', 1.5);
+        this.setupStateSlider('ctrl-rings', 'val-rings', 'displacementRings', 30);
         this.setupStateSlider('ctrl-centerX', 'val-centerX', 'displacementX');
         this.setupStateSlider('ctrl-centerY', 'val-centerY', 'displacementY');
-        this.setupStateSlider('ctrl-chromatic', 'val-chromatic', 'displacementChromatic', 0.1);
-        this.setupStateSlider('ctrl-wobble', 'val-wobble', 'displacementWobble', 0.1);
+        this.setupStateSlider('ctrl-chromatic', 'val-chromatic', 'displacementChromatic', 0.25);
+        this.setupStateSlider('ctrl-wobble', 'val-wobble', 'displacementWobble', 0.2);
         
-        this.setupStateSlider('ctrl-circle2', 'val-circle2', 'rippleOrigin2Strength', 0.5);
-        this.setupStateSlider('ctrl-circle3', 'val-circle3', 'rippleOrigin3Strength', 0.5);
+        this.setupStateSlider('ctrl-circle2', 'val-circle2', 'rippleOrigin2Strength', 1.0);
+        this.setupStateSlider('ctrl-circle3', 'val-circle3', 'rippleOrigin3Strength', 1.0);
         
         this.setupStateSlider('ctrl-morph', 'val-morph', 'morphProgress');
         this.setupStateSlider('ctrl-morphType', 'val-morphType', 'morphType', 2);
         
         // Shape & Wave Motion controls
         this.setupStateSlider('ctrl-shapeType', 'val-shapeType', 'shapeType', 11);
-        this.setupStateSlider('ctrl-waveDelay', 'val-waveDelay', 'waveDelay', 2);
-        this.setupStateSlider('ctrl-waveAmplitude', 'val-waveAmplitude', 'waveAmplitude', 0.3);
-        this.setupStateSlider('ctrl-waveSpeed', 'val-waveSpeed', 'waveSpeed', 3);
-        this.setupStateSlider('ctrl-edgeSharpness', 'val-edgeSharpness', 'edgeSharpness', 0.3);
+        this.setupStateSlider('ctrl-waveDelay', 'val-waveDelay', 'waveDelay', 4);
+        this.setupStateSlider('ctrl-waveAmplitude', 'val-waveAmplitude', 'waveAmplitude', 0.6);
+        this.setupStateSlider('ctrl-waveSpeed', 'val-waveSpeed', 'waveSpeed', 5);
+        this.setupStateSlider('ctrl-edgeSharpness', 'val-edgeSharpness', 'edgeSharpness', 1.0);
         this.setupStateSlider('ctrl-minRadius', 'val-minRadius', 'minRadius', 0.5);
         this.setupStateSlider('ctrl-rotation', 'val-rotation', 'shapeRotation', 6.28);
         this.setupStateSlider('ctrl-rotationSpeed', 'val-rotationSpeed', 'rotationSpeed');
@@ -2328,8 +2484,56 @@ class InnerReflectionApp {
         });
     }
 
+    // Apply hand movement to state engine for global parameter effects
+    applyHandToState(handState, deltaTime) {
+        if (!handState || !this.stateEngine || handState.count < 1) return;
+        
+        // Calculate total hand movement intensity
+        let totalSpeed = 0;
+        let avgX = 0;
+        let avgY = 0;
+        
+        for (let i = 0; i < Math.min(handState.count, 2); i++) {
+            const vel = handState.velocities?.[i] || { x: 0, y: 0 };
+            const pos = handState.positions?.[i] || { x: 0.5, y: 0.5 };
+            const strength = handState.strengths?.[i] || 0;
+            
+            const speed = Math.sqrt(vel.x * vel.x + vel.y * vel.y);
+            totalSpeed += speed * strength;
+            avgX += (pos.x - 0.5) * strength;
+            avgY += (pos.y - 0.5) * strength;
+        }
+        
+        const count = Math.min(handState.count, 2);
+        if (count > 0) {
+            avgX /= count;
+            avgY /= count;
+        }
+        
+        // Strong hand movement affects visual parameters
+        const str = 0.5;  // Strong influence
+        if (totalSpeed > 0.01) {
+            // Hand movement pushes displacement center
+            this.stateEngine.influence[this.stateEngine.dimensions.displacementX] += avgX * str * 2.0;
+            this.stateEngine.influence[this.stateEngine.dimensions.displacementY] += avgY * str * 2.0;
+            
+            // Speed affects chaos and intensity
+            this.stateEngine.influence[this.stateEngine.dimensions.overallChaos] += totalSpeed * str * 0.8;
+            this.stateEngine.influence[this.stateEngine.dimensions.displacementStrength] += totalSpeed * str * 0.5;
+            this.stateEngine.influence[this.stateEngine.dimensions.displacementChromatic] += totalSpeed * str * 0.4;
+            
+            // Audio responds to hand movement
+            this.stateEngine.influence[this.stateEngine.dimensions.filterCutoff] += totalSpeed * str * 0.5;
+            this.stateEngine.influence[this.stateEngine.dimensions.reverbAmount] += totalSpeed * str * 0.3;
+            this.stateEngine.influence[this.stateEngine.dimensions.delayAmount] += totalSpeed * str * 0.25;
+        }
+    }
+
     applyHandAudio(handState, deltaTime) {
         if (!this.enabledInputs.sound || !this.audioEngine) return;
+        
+        // Also apply hand data to state engine for connected visual+audio response
+        this.applyHandToState(handState, deltaTime);
         
         try {
             const now = performance.now();
@@ -3077,6 +3281,13 @@ class InnerReflectionApp {
     setStateDimensionInstant(name, value) {
         if (this.stateEngine && this.stateEngine.dimensions[name] !== undefined) {
             this.stateEngine.setDimensionValue(name, value);
+        }
+    }
+    
+    // For preset changes - updates value, home value, and holds it steady
+    setPresetDimension(name, value) {
+        if (this.stateEngine && this.stateEngine.dimensions[name] !== undefined) {
+            this.stateEngine.setPresetValue(name, value);
         }
     }
     
@@ -4049,7 +4260,94 @@ class InnerReflectionApp {
             }
         }
         
+        // === UPDATE SLIDERS TO MATCH PRESET ===
+        // This makes the UI reflect the preset values
+        this.updateSlidersFromPreset(preset);
+        
         console.log('Sound preset applied:', presetName);
+    }
+    
+    updateSlidersFromPreset(preset) {
+        if (!preset) return;
+        
+        const updateVolumeSlider = (id, valueId, dbValue) => {
+            const slider = document.getElementById(id);
+            const valueSpan = document.getElementById(valueId);
+            if (slider && valueSpan) {
+                slider.value = dbValue;
+                valueSpan.textContent = dbValue;
+            }
+        };
+        
+        const updateFilterSlider = (id, valueId, hzValue) => {
+            const slider = document.getElementById(id);
+            const valueSpan = document.getElementById(valueId);
+            if (slider && valueSpan) {
+                slider.value = hzValue;
+                valueSpan.textContent = hzValue;
+            }
+        };
+        
+        // Update drone volume sliders
+        if (preset.droneVolumes) {
+            if (preset.droneVolumes.base !== undefined) {
+                updateVolumeSlider('ctrl-droneBase', 'val-droneBase', preset.droneVolumes.base);
+            }
+            if (preset.droneVolumes.mid !== undefined) {
+                updateVolumeSlider('ctrl-droneMid', 'val-droneMid', preset.droneVolumes.mid);
+            }
+            if (preset.droneVolumes.high !== undefined) {
+                updateVolumeSlider('ctrl-droneHigh', 'val-droneHigh', preset.droneVolumes.high);
+            }
+            if (preset.droneVolumes.pad !== undefined) {
+                updateVolumeSlider('ctrl-dronePad', 'val-dronePad', preset.droneVolumes.pad);
+            }
+        }
+        
+        // Update drone filter sliders
+        if (preset.droneFilters) {
+            if (preset.droneFilters.base !== undefined) {
+                updateFilterSlider('ctrl-droneBaseFilter', 'val-droneBaseFilter', preset.droneFilters.base);
+            }
+            if (preset.droneFilters.mid !== undefined) {
+                updateFilterSlider('ctrl-droneMidFilter', 'val-droneMidFilter', preset.droneFilters.mid);
+            }
+            if (preset.droneFilters.high !== undefined) {
+                updateFilterSlider('ctrl-droneHighFilter', 'val-droneHighFilter', preset.droneFilters.high);
+            }
+        }
+        
+        // Update effect sliders
+        if (preset.effectSettings) {
+            const fx = preset.effectSettings;
+            if (fx.reverbWet !== undefined) {
+                const reverbSlider = document.getElementById('ctrl-reverbWet');
+                const reverbVal = document.getElementById('val-reverbWet');
+                if (reverbSlider && reverbVal) {
+                    const reverbPercent = Math.round(fx.reverbWet * 100);
+                    reverbSlider.value = reverbPercent;
+                    reverbVal.textContent = reverbPercent;
+                }
+            }
+            if (fx.delayWet !== undefined) {
+                const delaySlider = document.getElementById('ctrl-delayWet');
+                const delayVal = document.getElementById('val-delayWet');
+                if (delaySlider && delayVal) {
+                    const delayPercent = Math.round(fx.delayWet * 100);
+                    delaySlider.value = delayPercent;
+                    delayVal.textContent = delayPercent;
+                }
+            }
+            if (fx.delayFeedback !== undefined) {
+                const feedbackSlider = document.getElementById('ctrl-delayFeedback');
+                const feedbackVal = document.getElementById('val-delayFeedback');
+                if (feedbackSlider && feedbackVal) {
+                    const feedbackPercent = Math.round(fx.delayFeedback * 100);
+                    feedbackSlider.value = feedbackPercent;
+                    feedbackVal.textContent = feedbackPercent;
+                }
+            }
+        }
     }
     
     updateSliderFromState() {

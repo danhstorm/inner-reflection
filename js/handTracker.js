@@ -223,15 +223,16 @@ class HandTracker {
                 : 0;
             dyn.grab += (grabTarget - dyn.grab) * 0.08;
             
-            // Softer strength calculation
-            const strength = Utils.clamp(dyn.grab * (0.5 + speed * 0.8), 0, 0.7);
+            // Visible strength calculation for smoke effect
+            const strength = Utils.clamp(dyn.grab * (0.4 + speed * 0.5), 0, 0.7);  // Increased for visibility
             strengths[i] = strength;
             strengthSum += strength;
             
             this.handState.positions[i] = { x: palmCenter.x, y: palmCenter.y };
+            // More visible velocity for smoke effect
             this.handState.velocities[i] = {
-                x: Utils.clamp(dyn.velocity.x * 0.8, -1.2, 1.2),
-                y: Utils.clamp(dyn.velocity.y * 0.8, -1.2, 1.2)
+                x: Utils.clamp(dyn.velocity.x * 0.8, -1.0, 1.0),
+                y: Utils.clamp(dyn.velocity.y * 0.8, -1.0, 1.0)
             };
             this.handState.strengths[i] = strength;
             

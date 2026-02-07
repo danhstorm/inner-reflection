@@ -124,11 +124,27 @@ class VisualEngine {
         this.waveRipples = [];
         this.maxWaveRipples = 8;
         
-        this.handInertiaDecay = 0.988;     // Slightly faster decay but longer trail
-        this.handMomentumDecay = 0.978;    // Momentum decays faster for bouncier feel
-        this.handSwirlDecay = 0.965;       // Swirl decays faster
-        this.springStiffness = 0.015;      // Low stiffness for slow, liquid spring
-        this.springDamping = 0.92;         // High damping for gentle oscillation
+        // === RIBBON TRAIL SYSTEM ===
+        // Stores historical positions for smoke/water-like trails
+        this.ribbonTrails = [
+            [],  // Trail for hand 0
+            []   // Trail for hand 1
+        ];
+        this.maxRibbonPoints = 16;  // Reduced for performance
+        this.ribbonFadeRate = 0.98;  // Faster fade for performance
+        
+        // Smoothed hand effect values for gentle transitions
+        this.smoothedHandStrength = [0, 0];
+        this.smoothedHandVel = [
+            new THREE.Vector2(0, 0),
+            new THREE.Vector2(0, 0)
+        ];
+        
+        this.handInertiaDecay = 0.998;     // MUCH slower decay for longer trailing
+        this.handMomentumDecay = 0.996;    // Slower momentum decay for bendier feel
+        this.handSwirlDecay = 0.992;       // Slower swirl decay
+        this.springStiffness = 0.003;      // Lower stiffness for slower, goopier spring
+        this.springDamping = 0.992;        // Higher damping for slower oscillation
         this.fastSmoothingFrames = 0;
     }
     
@@ -401,9 +417,10 @@ class VisualEngine {
         if (hand) {
             const count = Math.min(hand.count || 0, 2);
             grad.uHandCount.value = count;
-            grad.uHandInfluence.value = hand.influence ?? 0.5;
+            // Capped influence for smooth visuals (no harsh artifacts)
+            grad.uHandInfluence.value = Math.min((hand.influence ?? 0.5) * 0.6, 0.4);
             disp.uHandCount.value = count;
-            disp.uHandInfluence.value = hand.influence ?? 0.5;
+            disp.uHandInfluence.value = Math.min((hand.influence ?? 0.5) * 0.6, 0.4);
             
             for (let i = 0; i < 2; i++) {
                 const pos = hand.positions?.[i] || { x: 0.5, y: 0.5 };
@@ -416,108 +433,76 @@ class VisualEngine {
                 const springTarget = this.springTarget[i];
                 const active = i < count && (rawStrength > 0.01 || Math.abs(vel.x) + Math.abs(vel.y) > 0.001);
                 
+                // RIBBON TRAIL SYSTEM - DISABLED for performance
+                // const trail = this.ribbonTrails[i];
+                
                 // Update spring target when hand is active
                 if (active) {
                     springTarget.set(pos.x, pos.y);
-                    
-                    // Add wave ripple when there's significant movement
-                    const speed = Math.sqrt(vel.x * vel.x + vel.y * vel.y);
-                    if (speed > 0.02 && this.waveRipples.length < this.maxWaveRipples) {
-                        // Only add ripple every few frames to prevent spam
-                        const lastRipple = this.waveRipples[this.waveRipples.length - 1];
-                        if (!lastRipple || lastRipple.age > 8) {
-                            this.waveRipples.push({
-                                x: pos.x,
-                                y: pos.y,
-                                velX: vel.x * 0.5,
-                                velY: vel.y * 0.5,
-                                strength: Math.min(rawStrength * speed * 3, 0.5),
-                                age: 0,
-                                maxAge: 120  // Ripples last about 2 seconds at 60fps
-                            });
-                        }
-                    }
                 }
                 
-                // Spring physics - liquid bouncy motion
-                // Calculate spring force toward target
+                // Spring physics - VERY gentle liquid bouncy motion
                 const dx = springTarget.x - springPos.x;
                 const dy = springTarget.y - springPos.y;
                 
-                // Apply spring force
+                // Apply spring force - reduced for slower response
                 springVel.x += dx * this.springStiffness;
                 springVel.y += dy * this.springStiffness;
-                
-                // Apply damping
                 springVel.x *= this.springDamping;
                 springVel.y *= this.springDamping;
-                
-                // Update position
                 springPos.x += springVel.x;
                 springPos.y += springVel.y;
                 
-                // Soft slimy physics - impulse from direct velocity
-                const softStrength = Math.pow(rawStrength, 1.5) * 0.5;
-                const impulse = active ? (0.2 + softStrength * 0.7) : 0;
+                // VISIBLE smoke physics - noticeable impulse
+                const softStrength = Math.pow(rawStrength, 1.3) * 0.5;  // More visible
+                const impulse = active ? (0.3 + softStrength * 0.5) : 0;  // Stronger impulse
                 
-                // Multi-layer momentum for organic slimy movement
-                inertia.x = inertia.x * this.handInertiaDecay + vel.x * impulse * 0.8;
-                inertia.y = inertia.y * this.handInertiaDecay + vel.y * impulse * 0.8;
+                // Gentle inertia for organic trailing
+                inertia.x = inertia.x * this.handInertiaDecay + vel.x * impulse * 0.3;
+                inertia.y = inertia.y * this.handInertiaDecay + vel.y * impulse * 0.3;
                 
-                // Secondary momentum - slower, heavier, like thick slime
-                momentum.x = momentum.x * this.handMomentumDecay + inertia.x * 0.12;
-                momentum.y = momentum.y * this.handMomentumDecay + inertia.y * 0.12;
+                // Secondary momentum - slow, dreamy trailing
+                momentum.x = momentum.x * this.handMomentumDecay + inertia.x * 0.1;
+                momentum.y = momentum.y * this.handMomentumDecay + inertia.y * 0.1;
                 
-                // Swirl momentum - creates circular continuation when released
+                // Swirl momentum - gentle circular continuation
                 const speed = Math.sqrt(vel.x * vel.x + vel.y * vel.y);
-                if (active && speed > 0.08) {
-                    this.handSwirl[i] += (vel.x * inertia.y - vel.y * inertia.x) * 0.4;
+                if (active && speed > 0.05) {
+                    this.handSwirl[i] += (vel.x * inertia.y - vel.y * inertia.x) * 0.1;
                 }
                 this.handSwirl[i] *= this.handSwirlDecay;
                 
-                // Combine spring velocity with momentum for final effect
-                // Spring gives the bouncy liquid feel, momentum gives the trailing
-                const combinedVelX = springVel.x * 2.0 + inertia.x * 0.6 + momentum.x * 0.4;
-                const combinedVelY = springVel.y * 2.0 + inertia.y * 0.6 + momentum.y * 0.4;
+                // Combine velocities - MUCH reduced for smoke effect
+                const combinedVelX = springVel.x * 0.5 + inertia.x * 0.3 + momentum.x * 0.2;
+                const combinedVelY = springVel.y * 0.5 + inertia.y * 0.3 + momentum.y * 0.2;
                 
-                // Add subtle swirl to create circular motion
-                const swirlOffsetX = -combinedVelY * this.handSwirl[i] * 0.15;
-                const swirlOffsetY = combinedVelX * this.handSwirl[i] * 0.15;
+                // Subtle swirl
+                const swirlOffsetX = -combinedVelY * this.handSwirl[i] * 0.08;
+                const swirlOffsetY = combinedVelX * this.handSwirl[i] * 0.08;
+                
+                // Smooth the strength and velocity for visible transitions
+                const targetStrength = Math.min(softStrength * 0.8, 0.4);  // Capped for smooth visuals
+                this.smoothedHandStrength[i] += (targetStrength - this.smoothedHandStrength[i]) * 0.12;
+                this.smoothedHandVel[i].x += ((combinedVelX + swirlOffsetX) * 0.3 - this.smoothedHandVel[i].x) * 0.1;
+                this.smoothedHandVel[i].y += ((combinedVelY + swirlOffsetY) * 0.3 - this.smoothedHandVel[i].y) * 0.1;
+                
+                // Clamp velocity to prevent extreme distortion
+                const maxVel = 0.5;
+                this.smoothedHandVel[i].x = Math.max(-maxVel, Math.min(maxVel, this.smoothedHandVel[i].x));
+                this.smoothedHandVel[i].y = Math.max(-maxVel, Math.min(maxVel, this.smoothedHandVel[i].y));
 
                 grad.uHandPos.value[i].set(springPos.x, springPos.y);
-                grad.uHandVel.value[i].set(combinedVelX + swirlOffsetX, combinedVelY + swirlOffsetY);
-                grad.uHandStrength.value[i] = Math.min(softStrength * 0.9, 0.7);
+                grad.uHandVel.value[i].set(this.smoothedHandVel[i].x, this.smoothedHandVel[i].y);
+                grad.uHandStrength.value[i] = Math.min(this.smoothedHandStrength[i], 0.4);
                 disp.uHandPos.value[i].set(springPos.x, springPos.y);
-                disp.uHandVel.value[i].set(combinedVelX + swirlOffsetX, combinedVelY + swirlOffsetY);
-                disp.uHandStrength.value[i] = Math.min(softStrength * 0.9, 0.7);
+                disp.uHandVel.value[i].set(this.smoothedHandVel[i].x, this.smoothedHandVel[i].y);
+                disp.uHandStrength.value[i] = Math.min(this.smoothedHandStrength[i], 0.4);
             }
         } else {
             grad.uHandCount.value = 0;
             disp.uHandCount.value = 0;
-            // Continue physics simulation even without hand - this creates the lingering effect
-            for (let i = 0; i < this.handInertia.length; i++) {
-                this.handInertia[i].multiplyScalar(this.handInertiaDecay);
-                this.handMomentum[i].multiplyScalar(this.handMomentumDecay);
-                this.handSwirl[i] *= this.handSwirlDecay;
-                
-                // Continue spring physics for bounce-back
-                const springPos = this.springPosition[i];
-                const springVel = this.springVelocity[i];
-                const springTarget = this.springTarget[i];
-                
-                // Gently return toward center when inactive
-                springTarget.x += (0.5 - springTarget.x) * 0.002;
-                springTarget.y += (0.5 - springTarget.y) * 0.002;
-                
-                const dx = springTarget.x - springPos.x;
-                const dy = springTarget.y - springPos.y;
-                springVel.x += dx * this.springStiffness * 0.5;
-                springVel.y += dy * this.springStiffness * 0.5;
-                springVel.x *= this.springDamping;
-                springVel.y *= this.springDamping;
-                springPos.x += springVel.x;
-                springPos.y += springVel.y;
-            }
+            // Physics simulation disabled for performance
+            // Hand effects are disabled anyway
         }
         
         // Update and decay wave ripples
@@ -539,8 +524,8 @@ class VisualEngine {
         // This ensures EVERY parameter transitions smoothly - no jumps allowed
         // Even if sliders change instantly, the visuals morph gradually
         const fastSmoothing = this.fastSmoothingFrames > 0;
-        const smoothFactor = fastSmoothing ? 0.08 : 0.008;  // Smooth interpolation rate
-        const slowFactor = fastSmoothing ? 0.04 : 0.004;    // Extra slow for discrete values like rings/shape
+        const smoothFactor = fastSmoothing ? 0.15 : 0.04;  // Much faster interpolation
+        const slowFactor = fastSmoothing ? 0.08 : 0.02;    // Still smooth but faster for discrete values
         if (fastSmoothing) {
             this.fastSmoothingFrames = Math.max(0, this.fastSmoothingFrames - 1);
         }
@@ -560,8 +545,8 @@ class VisualEngine {
         this.smoothBuffer.wobble += (state.displacementWobble - this.smoothBuffer.wobble) * smoothFactor;
         this.smoothBuffer.chromatic += (state.displacementChromatic - this.smoothBuffer.chromatic) * smoothFactor;
         
-        // Shape type - VERY slow for smooth morphing between shapes
-        this.smoothBuffer.shapeType += ((state.shapeType || 0) - this.smoothBuffer.shapeType) * slowFactor * 0.5;
+        // Shape type - smooth but visible morphing between shapes
+        this.smoothBuffer.shapeType += ((state.shapeType || 0) - this.smoothBuffer.shapeType) * slowFactor;
         
         // Smooth rotation (handle wraparound carefully)
         let rotDiff = state.displacementRotation - this.smoothBuffer.rotation;
@@ -590,11 +575,11 @@ class VisualEngine {
         disp.uCenterLag2.value.set(this.ringLagCenters.lag2.x, this.ringLagCenters.lag2.y);
         disp.uCenterLag3.value.set(this.ringLagCenters.lag3.x, this.ringLagCenters.lag3.y);
         disp.uRingDelayMix.value = state.ringDelay ?? 0.35;
-        disp.uStrength.value = Math.min(this.smoothBuffer.strength, 3.5);  // Higher cap for stronger circles
+        disp.uStrength.value = Math.min(this.smoothBuffer.strength, 6.0);  // Allow much stronger displacement for glass plate effects
         disp.uMaxRadius.value = this.smoothBuffer.radius;
         disp.uRings.value = this.smoothBuffer.rings;  // Now smooth!
         disp.uWobble.value = this.smoothBuffer.wobble;
-        disp.uChromaticAberration.value = Math.min(this.smoothBuffer.chromatic, 0.4);
+        disp.uChromaticAberration.value = Math.min(this.smoothBuffer.chromatic, 0.6);  // Allow stronger chromatic aberration
         disp.uRipple2Center.value.set(this.smoothBuffer.ripple2X, this.smoothBuffer.ripple2Y);
         disp.uRipple2Strength.value = this.smoothBuffer.ripple2Strength;
         disp.uRipple3Center.value.set(this.smoothBuffer.ripple3X, this.smoothBuffer.ripple3Y);

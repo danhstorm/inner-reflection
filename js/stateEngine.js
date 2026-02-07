@@ -98,16 +98,16 @@ class StateEngine {
         // Manages 1-4 parameters slowly shifting at different times
         this.parameterShifts = {
             active: [],           // Currently shifting parameters
-            maxActive: 2,         // Max simultaneous shifts - reduced for stability
+            maxActive: 5,         // More simultaneous shifts for richer animation
             lastSpawnTime: 0,     // When we last started a new shift
-            spawnInterval: 10,    // Min seconds between new shift starts
+            spawnInterval: 4,     // Min seconds between new shift starts
             inputFeedbackActive: false,
             inputFeedbackIntensity: 0
         };
         
         // === HOME ATTRACTION - store ideal values to gently return to ===
         this.homeValues = new Float32Array(this.dimensionCount);
-        this.homeStrength = 0.002;  // Stronger pull back to ideal state - keeps visuals stable
+        this.homeStrength = 0.0005;  // Weaker pull - allow more dramatic drift from center
         
         // Initialize everything
         this.initialize();
@@ -134,12 +134,12 @@ class StateEngine {
             this.lockedValues[i] = 0.5;
             this.autoFactors[i] = 1;
             
-            // MUCH smoother, slower transitions - like hanging pendulum
-            this.smoothing[i] = 0.995 + Math.random() * 0.004; // 0.995-0.999
+            // Faster, more responsive transitions - noticeable but smooth
+            this.smoothing[i] = 0.97 + Math.random() * 0.02; // 0.97-0.99 - much faster
             
-            // MINIMAL drift - stay very close to curated values
-            this.driftSpeed[i] = 0.00001 + Math.random() * 0.00002;
-            this.driftScale[i] = 0.001 + Math.random() * 0.001;
+            // Stronger drift for more variation
+            this.driftSpeed[i] = 0.00008 + Math.random() * 0.0001;
+            this.driftScale[i] = 0.008 + Math.random() * 0.006;
         }
         
         // === RANDOM STARTING COLOR PALETTE ===
@@ -208,12 +208,22 @@ class StateEngine {
         this.setDimensionValue('minRadius', 0.08);        // Small center hole
         this.setDimensionValue('shapeRotation', 0);       // No rotation
         this.setDimensionValue('rotationSpeed', 0.05);    // Subtle auto-rotation
-        this.setDimensionValue('displacementStrength', 0.15); // Start with subtler refraction
+        this.setDimensionValue('displacementStrength', 0.35); // Start with moderate refraction
         
-        // Make shapeType drift very slowly
-        this.driftSpeed[this.dimensions.shapeType] = 0.00005;
-        this.driftScale[this.dimensions.shapeType] = 0.008;
-        this.smoothing[this.dimensions.shapeType] = 0.995;  // Very smooth transitions
+        // Make shapeType drift noticeably - morphing between shapes is the core visual experience
+        this.driftSpeed[this.dimensions.shapeType] = 0.0003;  // Much faster shape drift
+        this.driftScale[this.dimensions.shapeType] = 0.03;    // Larger shape variation
+        this.smoothing[this.dimensions.shapeType] = 0.98;     // Smooth but visible transitions
+        
+        // === DISPLACEMENT PARAMETER DRIFT - create dramatic variation ===
+        this.driftSpeed[this.dimensions.displacementStrength] = 0.0002;
+        this.driftScale[this.dimensions.displacementStrength] = 0.025;
+        this.driftSpeed[this.dimensions.displacementRadius] = 0.00015;
+        this.driftScale[this.dimensions.displacementRadius] = 0.02;
+        this.driftSpeed[this.dimensions.displacementChromatic] = 0.0002;
+        this.driftScale[this.dimensions.displacementChromatic] = 0.03;
+        this.driftSpeed[this.dimensions.waveAmplitude] = 0.00015;
+        this.driftScale[this.dimensions.waveAmplitude] = 0.02;
         
         // === BRIGHTNESS EVOLUTION CONTROL ===
         // This controls how fast the shader brightness evolves over time
@@ -242,7 +252,7 @@ class StateEngine {
         // Slider -15dB = normalized 0.625 = (−15 + 40) / 40
         this.setDimensionValue('droneBaseVolume', 0.625);
         this.setDimensionValue('droneMidVolume', 0.55);   // -18dB
-        this.setDimensionValue('droneHighVolume', 0.125);   // -35dB
+        this.setDimensionValue('droneHighVolume', 0.0);   // -50dB (off by default)
         // Filter cutoffs - match slider defaults (200Hz = (200-50)/950 ≈ 0.16)
         this.setDimensionValue('filterCutoff', 0.16);
         this.setDimensionValue('filterResonance', 0.16);
@@ -666,19 +676,19 @@ class StateEngine {
         const currentVal = this.current[dim];
         const isHue = dim <= 3;
         
-        // Target value - VERY gradual shift, stay close to current
-        let shiftAmount = (Math.random() - 0.5) * (isFeedback ? 0.15 : 0.08);
+        // Target value - BIGGER shifts for dramatic variation
+        let shiftAmount = (Math.random() - 0.5) * (isFeedback ? 0.4 : 0.3);
         let endValue = currentVal + shiftAmount;
         
         if (!isHue) {
-            // Keep non-hue values closer to center - gentle range
-            endValue = Math.max(0.25, Math.min(0.75, endValue));
+            // Allow wider range for more dramatic variation
+            endValue = Math.max(0.15, Math.min(0.85, endValue));
         }
         
-        // Duration - MUCH slower shifts for gentle evolution
+        // Duration - FASTER shifts for visible animation
         const duration = isFeedback ? 
-            10 + Math.random() * 20 :   // 10-30 seconds for feedback
-            25 + Math.random() * 45;    // 25-70 seconds normally
+            4 + Math.random() * 8 :   // 4-12 seconds for feedback
+            8 + Math.random() * 15;    // 8-23 seconds normally
         
         ps.active.push({
             dimension: dim,
@@ -690,7 +700,7 @@ class StateEngine {
         });
         
         ps.lastSpawnTime = this.time;
-        ps.spawnInterval = 10 + Math.random() * 50;  // Random interval until next
+        ps.spawnInterval = 4 + Math.random() * 12;  // More frequent shifts (4-16 seconds)
         
         // Get dimension name for logging
         const dimName = Object.entries(this.dimensions).find(([name, idx]) => idx === dim)?.[0] || `dim${dim}`;
@@ -788,8 +798,12 @@ class StateEngine {
             }
             // === HOME ATTRACTION ===
             // Gently pull toward the curated initial "nice" values
+            // DisplacementX/Y need MUCH stronger home attraction to prevent drifting to extremes
+            const isDisplacementXY = (i === this.dimensions.displacementX || i === this.dimensions.displacementY);
+            const strength = isDisplacementXY ? this.homeStrength * 20 : this.homeStrength;
+            
             const homeDistance = this.homeValues[i] - this.target[i];
-            const homeForce = homeDistance * this.homeStrength * deltaTime * 60 * autoFactor;
+            const homeForce = homeDistance * strength * deltaTime * 60 * autoFactor;
             this.target[i] += homeForce;
             
             // Slowly evolving drift direction (but smaller scale now)
@@ -848,9 +862,9 @@ class StateEngine {
             // Calculate difference to target
             const diff = this.target[i] - this.current[i];
             
-            // Even higher momentum preservation for glacial movement
-            const momentumFactor = 0.998;
-            const accelerationFactor = (1 - this.smoothing[i]) * 0.08 * autoFactor;  // Slower acceleration
+            // Responsive momentum with visible movement
+            const momentumFactor = 0.95;
+            const accelerationFactor = (1 - this.smoothing[i]) * 0.5 * autoFactor;  // Much faster acceleration
             
             this.velocity[i] = this.velocity[i] * momentumFactor + diff * accelerationFactor;
             
@@ -869,8 +883,8 @@ class StateEngine {
                 this.velocity[i] -= penetration * elasticity;
             }
             
-            // Much stricter velocity cap - glacial movement
-            const maxVelocity = 0.0008 * (0.2 + autoFactor * 0.8);
+            // Higher velocity cap for visible movement
+            const maxVelocity = 0.008 * (0.3 + autoFactor * 0.7);  // 10x faster
             this.velocity[i] = Math.max(-maxVelocity, Math.min(maxVelocity, this.velocity[i]));
             
             // Smooth velocity changes - no sudden velocity jumps either
@@ -1039,18 +1053,18 @@ class StateEngine {
         const pushStrength = 0.18;
         
         // X position pushes displacement center horizontally
-        // Looking left/right shifts the portal - MORE DIRECT
-        this.influence[this.dimensions.displacementX] += pushX * pushStrength * 1.5;
+        // Looking left/right shifts the portal - gentler to prevent drift
+        this.influence[this.dimensions.displacementX] += pushX * pushStrength * 0.25; // Reduced from 1.5
         
         // Y position affects multiple parameters
         // Looking up: increase glow, brightness
         // Looking down: increase saturation, depth
-        this.influence[this.dimensions.glow] += -pushY * pushStrength * 0.4;
-        this.influence[this.dimensions.gradientBrightness] += -pushY * pushStrength * 0.3;
-        this.influence[this.dimensions.gradientSaturation] += pushY * pushStrength * 0.3;
+        this.influence[this.dimensions.glow] += -pushY * pushStrength * 0.2;
+        this.influence[this.dimensions.gradientBrightness] += -pushY * pushStrength * 0.15;
+        this.influence[this.dimensions.gradientSaturation] += pushY * pushStrength * 0.15;
         
-        // Stronger Y influence on displacement center - MORE DIRECT
-        this.influence[this.dimensions.displacementY] += pushY * pushStrength * 1.2;
+        // Y influence on displacement center - gentler to prevent drift
+        this.influence[this.dimensions.displacementY] += pushY * pushStrength * 0.2; // Reduced from 1.2
         
         // Face size/proximity affects intensity and scale
         // Closer (larger): more intense, tighter patterns
@@ -1098,24 +1112,25 @@ class StateEngine {
     handleFaceFeatures(faceData) {
         if (!faceData || !faceData.detected) return;
         
-        const str = 0.1; // Base influence strength - increased for more visible effect
+        const str = 0.1; // Reduced base influence strength - was causing rapid drift to extremes
         
         // === HEAD ROTATION ===
         // Yaw (turning left/right) - affects horizontal displacement and color shift
-        this.influence[this.dimensions.displacementX] += faceData.headYaw * str * 1.9;
+        this.influence[this.dimensions.displacementX] += faceData.headYaw * str * 0.5; // Reduced from 3.5
         this.influence[this.dimensions.hue1] += faceData.headYaw * str * 0.3;
         this.influence[this.dimensions.shapeRotation] += faceData.headYaw * str * 0.5;
+        this.influence[this.dimensions.displacementChromatic] += Math.abs(faceData.headYaw) * str * 0.3;
         
         // Pitch (looking up/down) - affects vertical position and brightness
-        this.influence[this.dimensions.displacementY] += faceData.headPitch * str * 1.5;
-        this.influence[this.dimensions.gradientBrightness] += -faceData.headPitch * str * 0.9;
-        this.influence[this.dimensions.glow] += -faceData.headPitch * str * 0.7;
-        this.influence[this.dimensions.filterCutoff] += -faceData.headPitch * str * 0.9;
+        this.influence[this.dimensions.displacementY] += faceData.headPitch * str * 0.4; // Reduced from 3.0
+        this.influence[this.dimensions.gradientBrightness] += -faceData.headPitch * str * 1.5;
+        this.influence[this.dimensions.glow] += -faceData.headPitch * str * 1.2;
+        this.influence[this.dimensions.filterCutoff] += -faceData.headPitch * str * 1.5;
         
         // Roll (tilting head sideways) - affects rotation and wave patterns
-        this.influence[this.dimensions.shapeRotation] += faceData.headRoll * str * 0.8;
-        this.influence[this.dimensions.colorRotation] += faceData.headRoll * str * 0.5;
-        this.influence[this.dimensions.displacementRotation] += faceData.headRoll * str * 0.6;
+        this.influence[this.dimensions.shapeRotation] += faceData.headRoll * str * 1.5;
+        this.influence[this.dimensions.colorRotation] += faceData.headRoll * str * 1.0;
+        this.influence[this.dimensions.displacementRotation] += faceData.headRoll * str * 1.2;
         
         // === EYE OPENNESS ===
         // Eyes open = more alert, intense visuals
@@ -1258,6 +1273,27 @@ class StateEngine {
         }
     }
     
+    // Set a dimension from a preset - updates value, home value, and holds it
+    // This ensures drift doesn't pull the value back to old defaults
+    setPresetValue(dimensionName, value) {
+        const idx = this.dimensions[dimensionName];
+        if (idx !== undefined) {
+            // Set current, target, and velocity
+            this.current[idx] = value;
+            this.target[idx] = value;
+            this.velocity[idx] = 0;
+            // Update home value so drift pulls toward this new value
+            this.homeValues[idx] = value;
+            // Hold the value for a longer period (2-3 minutes)
+            this.manualHoldValue[idx] = value;
+            const holdDuration = 120 + Math.random() * 60;  // 2-3 minutes hold
+            const releaseDuration = 30 + Math.random() * 30;  // 30-60 second release
+            this.manualHoldUntil[idx] = this.time + holdDuration;
+            this.manualReleaseStart[idx] = this.manualHoldUntil[idx];
+            this.manualReleaseDuration[idx] = releaseDuration;
+        }
+    }
+    
     // Set only the target value for smooth interpolation (GRADUAL CHANGE)
     // This is the preferred method for slider controls
     setTargetValue(dimensionName, value) {
@@ -1319,12 +1355,12 @@ class StateEngine {
             // Focus mode creates smaller, more intense portal
             displacementX: this.get('displacementX'),
             displacementY: this.get('displacementY'),
-            displacementStrength: this.getScaled('displacementStrength', 1.0, 3.0) * (1 + this.focusMode.intensity * 0.7),
-            displacementRadius: this.getScaled('displacementRadius', 0.5, 2.2) * (1 - this.focusMode.intensity * 0.4),
-            displacementRings: Math.floor(this.getScaled('displacementRings', 4, 14)),
+            displacementStrength: this.getScaled('displacementStrength', 1.0, 5.0) * (1 + this.focusMode.intensity * 0.7),
+            displacementRadius: this.getScaled('displacementRadius', 0.5, 3.0) * (1 - this.focusMode.intensity * 0.4),
+            displacementRings: Math.floor(this.getScaled('displacementRings', 4, 30)),
             displacementRotation: this.get('displacementRotation') * Math.PI * 2,
-            displacementWobble: this.getScaled('displacementWobble', 0.02, 0.18),
-            displacementChromatic: this.getScaled('displacementChromatic', 0.05, 0.35) * (1 + this.focusMode.intensity * 0.5),
+            displacementWobble: this.getScaled('displacementWobble', 0.02, 0.35),
+            displacementChromatic: this.getScaled('displacementChromatic', 0.05, 0.5) * (1 + this.focusMode.intensity * 0.5),
             
             // Focus mode intensity for shader use
             focusIntensity: this.focusMode.intensity,
@@ -1333,10 +1369,10 @@ class StateEngine {
             // Calculate orbital positions based on time for smooth movement
             rippleOrigin2X: this.calculateOrbitX(2, 0.25),
             rippleOrigin2Y: this.calculateOrbitY(2, 0.25),
-            rippleOrigin2Strength: this.getScaled('rippleOrigin2Strength', 0.2, 0.6),
+            rippleOrigin2Strength: this.getScaled('rippleOrigin2Strength', 0.2, 1.2),
             rippleOrigin3X: this.calculateOrbitX(3, 0.35),
             rippleOrigin3Y: this.calculateOrbitY(3, 0.35),
-            rippleOrigin3Strength: this.getScaled('rippleOrigin3Strength', 0.1, 0.4),
+            rippleOrigin3Strength: this.getScaled('rippleOrigin3Strength', 0.1, 1.0),
             
             // Shape and style - 12 different 3D slice modes
             // 0: circles, 1: torus, 2: linear bands, 3: skewed lines, 4: cylinder
@@ -1345,12 +1381,12 @@ class StateEngine {
             
             // Wave motion - dedicated controls for flowing delayed movement
             // Enhanced cascade effect - center moves first, outer rings follow with visible delay
-            waveDelay: this.getScaled('waveDelay', 0.3, 1.2),  // Increased for dramatic cascade
-            waveAmplitude: this.getScaled('waveAmplitude', 0.03, 0.15),  // Slightly larger
-            waveSpeed: this.getScaled('waveSpeed', 0.1, 0.6),  // Much slower
+            waveDelay: this.getScaled('waveDelay', 0.3, 2.0),  // Increased for dramatic cascade
+            waveAmplitude: this.getScaled('waveAmplitude', 0.03, 0.4),  // Much larger for dramatic waves
+            waveSpeed: this.getScaled('waveSpeed', 0.1, 1.2),  // Allow faster waves
             
             // Edge and shape controls - SHARPER for stronger optical effect
-            edgeSharpness: this.getScaled('edgeSharpness', 0.01, 0.08),  // Lower = sharper edges
+            edgeSharpness: this.getScaled('edgeSharpness', 0.01, 0.15),  // Lower = sharper edges
             minRadius: this.getScaled('minRadius', 0, 0.35),
             shapeRotation: this.getScaled('shapeRotation', 0, 6.28),
             rotationSpeed: this.getScaled('rotationSpeed', 0, 0.4),

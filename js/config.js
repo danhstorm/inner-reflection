@@ -105,7 +105,7 @@ const CONFIG = {
                 enabled: true,
                 type: 'granular',
                 frequency: 440,         // Hz (A4)
-                volume: -42,            // dB - reduced significantly
+                volume: -35,            // dB - shimmer at -35db
                 attack: 3,
                 release: 6,
                 filterFreq: 3500,       // Slightly darker
@@ -243,8 +243,8 @@ const CONFIG = {
     // =========================================
     performance: {
         targetFPS: 60,
-        pixelRatio: Math.min(window.devicePixelRatio, 2),  // Cap at 2x for performance
-        antialias: true,
+        pixelRatio: Math.min(window.devicePixelRatio, 1.5),  // Cap at 1.5x for better performance
+        antialias: false,  // Disabled for performance
         powerPreference: 'high-performance'
     }
 };

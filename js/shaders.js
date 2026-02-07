@@ -180,19 +180,11 @@ const Shaders = {
             return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
         }
         
-        // Fractional Brownian Motion
+        // Fractional Brownian Motion - ultra light version
         float fbm(vec3 p, float octaves) {
-            float value = 0.0;
-            float amplitude = 0.5;
-            float frequency = 1.0;
-            
-            for (int i = 0; i < 6; i++) {
-                if (float(i) >= octaves) break;
-                value += amplitude * snoise(p * frequency);
-                frequency *= 2.0;
-                amplitude *= 0.5;
-            }
-            
+            // 2 octaves only for maximum performance
+            float value = snoise(p) * 0.5;
+            value += snoise(p * 2.0) * 0.25;
             return value;
         }
         
@@ -311,38 +303,13 @@ const Shaders = {
             float time = uTime * uSpeed * 0.08;
             float dropTime = uTime * uColorDropSpeed * 0.15;
 
-            // Hand-driven liquid refraction - soft slimy physics
-            // Gentle organic swirls like thick colorful slime
+            // Hand-driven liquid refraction - DISABLED for now to prevent artifacts
+            // TODO: Re-enable with proper bounds checking
             vec2 uvFlow = uvCorrected;
-            if (uHandCount > 0.0) {
-                for (int i = 0; i < 2; i++) {
-                    if (float(i) >= uHandCount) {
-                        continue;
-                    }
-                    vec2 toHand = uvFlow - uHandPos[i];
-                    float dist = length(toHand);
-                    
-                    // Soft, wide falloff zones for slimy liquid feel
-                    // Using smoother exponential curves
-                    float innerFalloff = exp(-dist * 3.5);   // Softer inner zone
-                    float outerFalloff = exp(-dist * 1.5);   // Wide gentle ripples
-                    float midFalloff = exp(-dist * 2.2);     // Organic mid-range
-                    
-                    // Reduced base strength for subtler effect
-                    float strength = uHandStrength[i] * (0.3 + uHandInfluence * 0.4);
-                    
-                    // Swirl effect - gentle rotation like stirring honey
-                    vec2 swirl = vec2(-toHand.y, toHand.x) * strength * midFalloff * 0.6;
-                    
-                    // Drag effect - soft trailing like thick slime
-                    vec2 drag = uHandVel[i] * strength * outerFalloff * 0.7;
-                    
-                    // Bulge effect - very gentle outward push
-                    vec2 bulge = normalize(toHand + 0.0001) * strength * innerFalloff * 0.06;
-                    
-                    uvFlow += swirl + drag + bulge;
-                }
-            }
+            // Hand effects disabled - uvFlow stays as uvCorrected
+            
+            // Clamp uvFlow to prevent artifacts from out-of-bounds coordinates
+            uvFlow = clamp(uvFlow, vec2(0.01), vec2(0.99));
             
             // === START FADE - controls transition from preview to full experience ===
             // uStartFade: 0 = preview (dim background), 1 = full experience
@@ -368,7 +335,7 @@ const Shaders = {
             
             // === COLOR BLOBS ===
             // More drops with motion, blur variation, lighting, and inversion controls
-            const int MAX_BLOBS = 12;
+            const int MAX_BLOBS = 3;  // Reduced to 3 for performance
             float blobCount = clamp(uBlobCount, 1.0, float(MAX_BLOBS));
             float blobSpread = mix(0.5, 1.35, uBlobSpread) * (0.7 + uColorDropSpread * 0.6);
             float blobScale = mix(0.6, 1.6, uBlobScale);
@@ -415,11 +382,7 @@ const Shaders = {
                 float softness = (0.08 + seed2 * 0.12) * blobBlur;
                 
                 vec2 uvBlob = uvFlow;
-                if (uBlobWarp > 0.001) {
-                    float warp1 = snoise(vec3(uvFlow * 2.0 + fi, time * 0.03));
-                    float warp2 = snoise(vec3(uvFlow * 2.4 - fi, time * 0.025));
-                    uvBlob += vec2(warp1, warp2) * uBlobWarp * 0.05;
-                }
+                // Blob warp disabled for performance
                 
                 float shape = smudgedShape(
                     uvBlob, pos, size,
@@ -462,8 +425,11 @@ const Shaders = {
                     float lightenMix = step(0.6, seed3) * blobLighten;
                     blended = mix(blended, blendAdd(color, dropColor * (0.7 + seed2 * 0.6)), lightenMix);
                     
-                    float invertMix = step(0.7, seed) * blobInvert;
-                    blended = mix(blended, vec3(1.0) - blended, invertMix);
+                    // Softer invert - never go full black
+                    float invertMix = step(0.7, seed) * blobInvert * 0.5;
+                    vec3 inverted = vec3(1.0) - blended;
+                    inverted = max(inverted, vec3(0.1)); // Floor to prevent pure black
+                    blended = mix(blended, inverted, invertMix);
                     
                     color = mix(color, blended, shape * mixStrength * (0.7 + fi * 0.03));
                 }
@@ -477,8 +443,11 @@ const Shaders = {
             // Apply gentle contrast
             color = (color - 0.5) * uContrast + 0.5;
             
+            // Hard floor minimum brightness to avoid harsh pure black
+            color = max(color, vec3(0.05));
+            
             // Clamp to valid range
-            color = clamp(color, 0.0, 1.0);
+            color = clamp(color, 0.05, 1.0);
             
             gl_FragColor = vec4(color, 1.0);
         }
@@ -691,7 +660,7 @@ const Shaders = {
         // ===========================================
         // GLASS PLATE EFFECT
         // Creates stacked round glass plates with edge refraction
-        // Stronger refraction at the edges of each plate
+        // Can create strong splitting/displacement effects like stacked prisms
         // ===========================================
         
         // Calculate glass plate refraction - stronger at edges
@@ -700,16 +669,19 @@ const Shaders = {
             // Distance from the edge of this plate
             float distFromEdge = abs(distFromCenter - plateRadius);
             
-            // Refraction is strongest right at the edge, fades inward
-            // Use sharp falloff from edge for more prominent effect
-            float edgeRefraction = 1.0 - smoothstep(0.0, edgeWidth * 0.7, distFromEdge);
+            // Very sharp edge detection for distinct ring bands
+            float sharpEdge = 1.0 - smoothstep(0.0, edgeWidth * 0.2, distFromEdge);
             
-            // Boost edge intensity
-            edgeRefraction = pow(edgeRefraction, 0.7) * 1.4;
+            // Create a distinct band pattern (like image 7's concentric rings)
+            float bandPattern = sin(distFromCenter * 50.0 / edgeWidth) * 0.5 + 0.5;
+            float bandedEdge = sharpEdge * (0.7 + bandPattern * 0.3);
             
-            // Add slight refraction across the whole plate (glass has some effect throughout)
-            float plateInterior = smoothstep(plateRadius + edgeWidth, plateRadius - edgeWidth * 0.5, distFromCenter);
-            float interiorRefraction = plateInterior * 0.2;
+            // Boost intensity dramatically for prominent, visible rings
+            float edgeRefraction = pow(bandedEdge, 0.4) * 2.5;
+            
+            // Interior lens effect
+            float plateInterior = smoothstep(plateRadius + edgeWidth, plateRadius - edgeWidth * 0.3, distFromCenter);
+            float interiorRefraction = plateInterior * 0.5;
             
             return edgeRefraction + interiorRefraction;
         }
@@ -720,30 +692,20 @@ const Shaders = {
             float plateSpacing = maxRadius / max(numPlates, 1.0);
             
             // Edge width controls how thick the refraction band is at each plate edge
-            // Make edges sharper overall for more prominent rings
-            float edgeWidth = plateSpacing * mix(0.1, 0.35, 1.0 - edgeSharpness);
+            // Lower edgeSharpness = sharper, thinner bands (more dramatic)
+            float edgeWidth = plateSpacing * mix(0.02, 0.2, 1.0 - edgeSharpness);
             
-            for (float i = 1.0; i <= 16.0; i += 1.0) {
+            // Reduced to max 4 iterations for performance
+            for (float i = 1.0; i <= 4.0; i += 1.0) {
                 if (i > numPlates) break;
-                
-                // Each plate has a slightly different radius (incremental sizes)
-                float plateIndex = i;
-                float waveOffset = getRingWaveOffset(plateIndex, numPlates, phase, delay, uWaveAmplitude);
-                // Increase wave offset influence for more motion
-                float plateRadius = plateSpacing * i + waveOffset * 0.5;
-                
-                // Calculate refraction contribution from this plate
+                float waveOffset = getRingWaveOffset(i, numPlates, phase, delay, uWaveAmplitude);
+                float plateRadius = plateSpacing * i + waveOffset * 1.2;
                 float refraction = glassPlateRefraction(dist, plateRadius, edgeWidth);
-                
-                // Plates further out have slightly less effect (depth attenuation)
-                // But reduce the falloff for stronger outer plates
-                float depthFade = 1.0 - (i / numPlates) * 0.2;
-                
-                totalRefraction += refraction * depthFade;
+                totalRefraction += refraction * (0.8 + 0.2 * sin(i * 1.5));
             }
             
-            // Increase overall intensity for stronger effect
-            return totalRefraction * 1.0;
+            // Strong overall intensity
+            return totalRefraction * 2.0;
         }
         
         // ===========================================
@@ -809,7 +771,8 @@ const Shaders = {
             float totalRefraction = 0.0;
             float edgeWidth = plateSpacing * mix(0.2, 0.5, 1.0 - uEdgeSharpness);
             
-            for (float i = 1.0; i <= 16.0; i += 1.0) {
+            // Reduced to max 4 iterations for performance
+            for (float i = 1.0; i <= 4.0; i += 1.0) {
                 if (i > rings) break;
                 float waveOffset = getRingWaveOffset(i, rings, phase, delay, uWaveAmplitude);
                 float platePos = plateSpacing * i + waveOffset * 0.2;
@@ -958,17 +921,13 @@ const Shaders = {
             float refraction1 = 0.0;
             float refraction2 = 0.0;
             
-            for (float i = 1.0; i <= 12.0; i += 1.0) {
+            // Reduced to max 3 iterations for performance
+            for (float i = 1.0; i <= 3.0; i += 1.0) {
                 if (i > rings * 0.6) break;
                 float waveOffset1 = getRingWaveOffset(i, rings, phase, delay, uWaveAmplitude);
-                float waveOffset2 = getRingWaveOffset(i, rings, phase * 1.1, delay * 0.9, uWaveAmplitude);
-                
                 float platePos1 = plateSpacing * i + waveOffset1 * 0.15;
-                float platePos2 = plateSpacing * i + waveOffset2 * 0.15;
-                
                 float edge1 = 1.0 - smoothstep(0.0, edgeWidth, abs(dist1 - platePos1));
-                float edge2 = 1.0 - smoothstep(0.0, edgeWidth, abs(dist2 - platePos2));
-                
+                float edge2 = 1.0 - smoothstep(0.0, edgeWidth, abs(dist2 - platePos1));
                 refraction1 += edge1 * (1.0 - i / rings * 0.4);
                 refraction2 += edge2 * (1.0 - i / rings * 0.4);
             }
@@ -1090,14 +1049,14 @@ const Shaders = {
             float shapeUpper = getShapeValue(upperShape, uv, center, uRings, phase, delay);
             float shapeValue = mix(shapeLower, shapeUpper, blendFactor);
             
-            // SOFTEN the shape value to prevent harsh edges
-            // Clamp to reasonable range and apply smoothing
-            shapeValue = clamp(shapeValue, 0.0, 2.0);
-            shapeValue = pow(shapeValue, 1.5) * 1.2;  // Gentler power curve
+            // Allow higher range for more dramatic effect
+            shapeValue = clamp(shapeValue, 0.0, 3.0);
+            shapeValue = pow(shapeValue, 1.3) * 1.5;  // Strong but controlled
             
-            // Organic wobble for softer movement
-            float wobble = sin(angle * 2.0 + phase * 0.1) * uWobble * 1.5;
-            wobble += sin(angle * 3.0 - phase * 0.08) * uWobble * 0.8;
+            // Strong organic wobble
+            float wobble = sin(angle * 2.0 + phase * 0.15) * uWobble * 2.0;
+            wobble += sin(angle * 3.0 - phase * 0.1) * uWobble * 1.2;
+            wobble += cos(angle * 5.0 + phase * 0.05) * uWobble * 0.5;  // Higher frequency detail
             
             // Direction calculation - radial with tangential component
             vec2 radialDir = normalize(toCenter + 0.0001);
@@ -1107,27 +1066,27 @@ const Shaders = {
             float linearBias = smoothstep(1.5, 3.5, shapeIdx) * smoothstep(4.5, 3.5, shapeIdx);
             linearBias += smoothstep(7.5, 8.5, shapeIdx) * smoothstep(9.5, 8.5, shapeIdx);
             
-            // Mix directions based on shape type
-            float tangentMix = sin(phase * 0.1) * 0.3 + linearBias * 0.5;
+            // Mix directions based on shape type - with more dynamic variation
+            float tangentMix = sin(phase * 0.15) * 0.4 + linearBias * 0.6;
             vec2 direction = normalize(radialDir + tangentDir * tangentMix);
             
-            // Calculate displacement amount - strong but smooth
-            float displaceAmount = shapeValue * strength * (1.0 + wobble) * 2.2;
+            // Calculate displacement amount - MUCH stronger for dramatic splits
+            float displaceAmount = shapeValue * strength * (1.0 + wobble) * 3.0;
             
             // Apply inversion if set
             if (uInversion > 0.0) {
-                displaceAmount = mix(displaceAmount, -displaceAmount * 0.8, uInversion);
+                displaceAmount = mix(displaceAmount, -displaceAmount * 0.9, uInversion);
             }
             
-            // Softer fades for full-screen coverage
-            float innerFade = smoothstep(0.0, uMinRadius * 3.0, dist);
-            float outerFade = smoothstep(uMaxRadius * 2.0, uMaxRadius * 0.5, dist);
+            // Wider coverage with gentle fades
+            float innerFade = smoothstep(0.0, uMinRadius * 2.5, dist);
+            float outerFade = smoothstep(uMaxRadius * 2.5, uMaxRadius * 0.4, dist);
             
             // Final displacement with smooth falloff
             vec2 result = direction * displaceAmount * innerFade * outerFade;
             
-            // Limit maximum displacement to prevent extreme artifacts
-            float maxDisp = 0.15;
+            // Allow much stronger maximum displacement for dramatic glass plate effects
+            float maxDisp = 0.5;
             float resultLen = length(result);
             if (resultLen > maxDisp) {
                 result = result * (maxDisp / resultLen);
@@ -1185,48 +1144,33 @@ const Shaders = {
             
             vec2 center1Lagged = applyCenterLag(uvCorrected, center1, lag1, lag2, lag3, uRingDelayMix);
             
-            // Calculate displacement from each origin with different shapes
+            // PERFORMANCE: Only calculate single displacement origin
             vec2 disp1 = calculateDisplacement(uvCorrected, center1Lagged, uStrength * strengthMod, uShapeType, wavePhase, waveDelay);
-            vec2 disp2 = calculateDisplacement(uvCorrected, center2, uRipple2Strength * strengthMod, uShapeType + 1.0, wavePhase * 1.1, waveDelay * 0.85);
-            vec2 disp3 = calculateDisplacement(uvCorrected, center3, uRipple3Strength * strengthMod, uShapeType + 2.0, wavePhase * 0.9, waveDelay * 1.15);
             
-            // Combine displacements - can be very strong
-            vec2 totalDisp = disp1 + disp2 * 0.8 + disp3 * 0.6;
+            // Use only primary displacement for much better performance
+            vec2 totalDisp = disp1;
 
-            // Hand-driven drag - soft slimy liquid refraction
-            // Gentle organic movement like thick colorful slime
-            if (uHandCount > 0.0) {
+            // Hand-driven drag - simplified and re-enabled
+            if (uHandCount > 0.5 && uHandInfluence > 0.01) {
                 vec2 handWarp = vec2(0.0);
                 for (int i = 0; i < 2; i++) {
-                    if (float(i) >= uHandCount) {
-                        continue;
+                    if (float(i) >= uHandCount) break;
+                    vec2 handPos = uHandPos[i];
+                    if (aspectRatio > 1.0) {
+                        handPos.x = (handPos.x - 0.5) * aspectRatio + 0.5;
+                    } else {
+                        handPos.y = (handPos.y - 0.5) / aspectRatio + 0.5;
                     }
-                    vec2 toHand = uvCorrected - uHandPos[i];
-                    float dist = length(toHand);
-                    
-                    // Soft, organic falloff zones - slimy and floaty
-                    float innerFalloff = exp(-dist * 3.0);   // Soft core
-                    float midFalloff = exp(-dist * 1.8);     // Wide liquid zone
-                    float outerFalloff = exp(-dist * 1.0);   // Very wide gentle ripples
-                    
-                    // Reduced strength for subtler, dreamier effect
-                    float strength = uHandStrength[i] * (0.3 + uHandInfluence * 0.5);
-                    
-                    // Drag effect - soft trailing follows hand
-                    vec2 drag = uHandVel[i] * strength * outerFalloff * 0.6;
-                    
-                    // Pull effect - very gentle attraction toward center
-                    vec2 pull = -toHand * strength * midFalloff * 0.04;
-                    
-                    // Swirl effect - organic rotation like stirring
-                    vec2 swirl = vec2(-toHand.y, toHand.x) * strength * midFalloff * 0.25;
-                    
-                    // Bulge effect - subtle outward push
-                    vec2 bulge = normalize(toHand + 0.0001) * strength * innerFalloff * 0.08;
-                    
-                    handWarp += drag + pull + swirl + bulge;
+                    vec2 toHand = uvCorrected - handPos;
+                    float distToHand = length(toHand);
+                    float falloff = smoothstep(0.5, 0.0, distToHand);
+                    float strength = uHandStrength[i] * uHandInfluence * falloff;
+                    // Simple drag toward hand position
+                    handWarp -= toHand * strength * 0.15;
+                    // Add velocity-based swirl
+                    handWarp += uHandVel[i] * strength * 0.1;
                 }
-                totalDisp += handWarp * 0.5;  // Reduced overall hand contribution
+                totalDisp += handWarp;
             }
             
             // Apply rotation
@@ -1236,32 +1180,11 @@ const Shaders = {
             float depthWarp = sin(uDepthPhase + length(uvCorrected - 0.5) * 2.0) * 0.02 * depthPulse;
             totalDisp *= 1.0 + depthWarp;
             
-            // Morph between current and alternate shape
-            if (uMorphProgress > 0.01) {
-                vec2 morphDisp = calculateDisplacement(uvCorrected, center1Lagged, uStrength * strengthMod, uMorphType, wavePhase * 1.2, waveDelay * 0.7);
-                totalDisp = mix(totalDisp, morphDisp, uMorphProgress);
-            }
+            // Morph disabled for performance
+            // if (uMorphProgress > 0.01) {...}
             
-            // Glass plate overlay - additional edge refraction at plate boundaries
-            if (uRingOverlayStrength > 0.001) {
-                vec2 plateVec = uvCorrected - center1Lagged;
-                float plateDist = length(plateVec);
-                float plateSpacing = uMaxRadius / max(uRings * 0.5, 1.0);
-                float edgeWidth = plateSpacing * mix(0.1, 0.3, uRingOverlayWidth);
-                
-                // Accumulate refraction from multiple plate edges
-                float plateRefraction = 0.0;
-                for (float i = 1.0; i <= 10.0; i += 1.0) {
-                    if (i > uRings * 0.6) break;
-                    float plateRadius = plateSpacing * i;
-                    float distFromEdge = abs(plateDist - plateRadius);
-                    float edgeEffect = 1.0 - smoothstep(0.0, edgeWidth, distFromEdge);
-                    plateRefraction += edgeEffect * (1.0 - i / uRings * 0.5);
-                }
-                
-                vec2 plateDir = normalize(plateVec + 0.0001);
-                totalDisp += plateDir * plateRefraction * uRingOverlayStrength * 0.06;
-            }
+            // Glass plate overlay - DISABLED for performance
+            // if (uRingOverlayStrength > 0.001) {...}
             
             // Convert back to UV space (undo aspect correction)
             if (aspectRatio > 1.0) {
@@ -1273,13 +1196,25 @@ const Shaders = {
             vec2 finalUv = uv + totalDisp;
             vec2 uvClamp = clamp(finalUv, vec2(0.005), vec2(0.995));
             
-            // Strong chromatic aberration based on displacement magnitude
+            // === DRAMATIC CHROMATIC ABERRATION ===
+            // Creates strong color separation like prism/glass plate effects
             float dispMagnitude = length(totalDisp);
             float edgeDist = min(min(uvClamp.x, 1.0 - uvClamp.x), min(uvClamp.y, 1.0 - uvClamp.y));
             float edgeFade = smoothstep(0.0, 0.12, edgeDist);
-            float aberration = uChromaticAberration * (0.6 + dispMagnitude * 4.0);
-            aberration = min(aberration, 0.05) * edgeFade;
+            
+            // Multi-layer chromatic: base + displacement-driven + edge-driven
+            float baseAberration = uChromaticAberration * 3.0;
+            float dispAberration = dispMagnitude * uChromaticAberration * 20.0;
+            float totalAberration = (baseAberration + dispAberration);
+            totalAberration = min(totalAberration, 0.4) * edgeFade;  // Allow very strong splits
+            
+            // Primary chromatic direction follows displacement
             vec2 aberrationDir = normalize(totalDisp + 0.0001);
+            
+            // Add perpendicular component for more complex splitting
+            vec2 perpDir = vec2(-aberrationDir.y, aberrationDir.x);
+            float perpAmount = sin(dispMagnitude * 15.0) * 0.3;
+            aberrationDir = normalize(aberrationDir + perpDir * perpAmount);
             
             // Aspect-correct the aberration direction
             if (aspectRatio > 1.0) {
@@ -1288,14 +1223,28 @@ const Shaders = {
                 aberrationDir.y *= aspectRatio;
             }
             
-            // Sample with chromatic aberration - creates the color separation
-            vec2 uvR = clamp(uvClamp + aberrationDir * aberration * 1.2, vec2(0.001), vec2(0.999));
-            vec2 uvB = clamp(uvClamp - aberrationDir * aberration * 1.2, vec2(0.001), vec2(0.999));
+            // === TRIPLE-SAMPLE CHROMATIC with wider separation ===
+            // Red shifted one direction, blue opposite, green at center
+            float spreadR = totalAberration * 2.0;
+            float spreadB = totalAberration * 2.0;
+            
+            vec2 uvR = clamp(uvClamp + aberrationDir * spreadR, vec2(0.001), vec2(0.999));
+            vec2 uvB = clamp(uvClamp - aberrationDir * spreadB, vec2(0.001), vec2(0.999));
+            
+            // Optional: Add slight offset to green for even more dramatic split
+            vec2 uvG = uvClamp;
+            if (uChromaticAberration > 0.1) {
+                uvG = clamp(uvClamp + perpDir * totalAberration * 0.3, vec2(0.001), vec2(0.999));
+            }
+            
             float r = texture2D(uTexture, uvR).r;
-            float g = texture2D(uTexture, uvClamp).g;
+            float g = texture2D(uTexture, uvG).g;
             float b = texture2D(uTexture, uvB).b;
             
             vec3 color = vec3(r, g, b);
+            
+            // Hard floor minimum brightness to prevent harsh black artifacts
+            color = max(color, vec3(0.05));
             
             gl_FragColor = vec4(color, 1.0);
         }
@@ -1375,17 +1324,14 @@ const Shaders = {
         void main() {
             vec2 uv = vUv;
             
-            // Get blurred version
-            vec3 blurred = blur(uTexture, uv, uResolution, uBlur);
+            // Simplified - skip blur for performance, just use original
             vec3 original = texture2D(uTexture, uv).rgb;
+            vec3 color = original;
             
-            // Mix based on blur amount
-            vec3 color = mix(original, blurred, clamp(uBlur * 0.5, 0.0, 1.0));
-            
-            // Subtle glow (bloom effect from bright areas) - reduced
-            vec3 glowColor = blur(uTexture, uv, uResolution, uBlur * 3.0);
-            float luminance = dot(glowColor, vec3(0.299, 0.587, 0.114));
-            color += glowColor * smoothstep(0.5, 1.0, luminance) * uGlow * 0.5;
+            // Glow/bloom DISABLED for performance
+            // vec3 glowColor = blur(uTexture, uv, uResolution, uBlur * 3.0);
+            // float luminance = dot(glowColor, vec3(0.299, 0.587, 0.114));
+            // color += glowColor * smoothstep(0.5, 1.0, luminance) * uGlow * 0.5;
             
             // Color adjustments - apply saturation BOOST before brightness
             // This keeps colors vivid even when brightness increases
@@ -1431,6 +1377,9 @@ const Shaders = {
                 vignette = mix(1.0, vignette, edgeMix);
                 vignette = pow(vignette, mix(1.0, 2.2, expand));
                 
+                // Ensure vignette never goes completely black
+                vignette = max(vignette, 0.03);
+                
                 color *= vignette;
             }
             
@@ -1442,8 +1391,11 @@ const Shaders = {
             float grain = hash(uv * uResolution * 0.5 + fract(uTime * 60.0) * 100.0);
             color *= 1.0 + (grain - 0.5) * uFilmGrain * 0.5;
             
+            // Hard minimum brightness floor to prevent any black areas
+            color = max(color, vec3(0.05));
+            
             // Ensure valid range
-            color = clamp(color, 0.0, 1.0);
+            color = clamp(color, 0.05, 1.0);
             
             gl_FragColor = vec4(color, 1.0);
         }
